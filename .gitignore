@@ -1,0 +1,53 @@
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+.next/
+
+# Runtime data: never commit research files or generated indexes
+data/
+uploads/
+storage/
+media/
+vector_data/
+model_data/
+checkpoints/
+backups/
+*.sqlite3
+*.dump
+
+# Logs and temporary output
+/logs/
+/tmp/
+/temp/
+/dist/
+/build/
+*.log
+
+# Local tools and editors
+.idea/
+.vscode/
+.codex/
+.codex_work/
+.agents/
+.codegraph/
+.stfolder/
+.DS_Store
+Thumbs.db
+desktop.ini
