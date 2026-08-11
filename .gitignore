@@ -36,17 +36,21 @@ backups/
 /logs/
 /tmp/
 /temp/
+/output/
 /dist/
 /build/
+/staticfiles/
 *.log
 
 # Local tools and editors
 .idea/
 .vscode/
+.claude/
 .codex/
 .codex_work/
 .agents/
 .codegraph/
+.sync-conflict-*.env
 .stfolder/
 .DS_Store
 Thumbs.db
