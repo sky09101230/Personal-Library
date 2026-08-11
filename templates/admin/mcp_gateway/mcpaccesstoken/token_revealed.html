@@ -1,0 +1,9 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<h1>MCP 访问令牌已生成</h1>
+{% if regenerated %}<p>旧令牌已立即失效。</p>{% endif %}
+<p>请立即复制并安全保存。离开此页面后无法再次查看该令牌。</p>
+<p><textarea readonly rows="3" style="width: 100%; max-width: 760px; font-family: monospace;">{{ token }}</textarea></p>
+<p><a class="button" href="{{ change_url }}">返回令牌设置</a></p>
+{% endblock %}

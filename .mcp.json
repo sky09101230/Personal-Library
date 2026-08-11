@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "plab_library": {
+      "type": "http",
+      "url": "http://210.28.141.24:8000/mcp",
+      "headers": {
+        "Authorization": "Bearer ${PLAB_MCP_TOKEN}"
+      }
+    }
+  }
+}
