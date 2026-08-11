@@ -1,0 +1,3 @@
+{% extends "base.html" %}
+{% block title %}Download | PLAB{% endblock %}
+{% block content %}<div class="auth-card panel"><p class="eyebrow">NJU Box download</p><h1>{{ document.original_name }}</h1><p class="subtle">填写本次下载所需的个人 Token 和资料库密码。配置在 .env 时可留空。</p><form method="post">{% csrf_token %}{{ form.as_p }}<button class="primary" type="submit">Create download link</button></form></div>{% endblock %}

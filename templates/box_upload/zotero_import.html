@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}从 Zotero 导入 | PLAB{% endblock %}
+{% block content %}
+<div class="page-head">
+  <p class="eyebrow">Zotero Web API v3</p>
+  <h1>从 Zotero 导入文献</h1>
+  {% if upgrade_mode %}<p class="subtle">该功能正在限制范围内测试。</p>{% else %}<p class="subtle">单向导入 metadata 和 Zotero 实际托管的 PDF。API Key 仅用于本次请求，不会保存，也不会写回 Zotero。</p>{% endif %}
+</div>
+{% if messages %}{% for message in messages %}<div class="notice">{{ message }}</div>{% endfor %}{% endif %}
+{% if upgrade_mode %}
+<div class="panel"><h2>正在测试升级当中</h2><p class="subtle">Zotero 导入目前仅向管理员开放，完成测试后再向普通成员开放。</p></div>
+{% else %}
+<div class="panel upload-grid">
+  <form id="zotero-import-form" method="post">
+    {% csrf_token %}{{ form.non_field_errors }}
+    {% for field in form %}<div class="field">{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endfor %}
+    <button id="zotero-import-submit" class="primary" type="submit">开始导入</button>
+    <div id="zotero-progress" class="progress-wrap" aria-live="polite">
+      <div class="progress-track"><div id="zotero-progress-bar" class="progress-bar"></div></div>
+      <div class="progress-label"><span id="zotero-progress-status">准备导入</span><span id="zotero-progress-percent">0%</span></div>
+    </div>
+    <ul id="zotero-progress-details" class="compact-list" hidden></ul>
+    <a id="zotero-library-link" href="{% url 'library' %}" hidden>打开文献库</a>
+  </form>
+  <aside class="side-note"><strong>导入规则</strong><p>优先按 Zotero Item Key 复用，其次按 DOI 去重。</p><p>仅下载 Zotero File Storage 中的 PDF；跳过网页快照、链接附件和本地 linked file。</p><p>单个 PDF 失败时保留 metadata，并在导入结果中报告。</p></aside>
+</div>
+<script>
+(() => {
+  const form = document.getElementById('zotero-import-form');
+  const submit = document.getElementById('zotero-import-submit');
+  const progress = document.getElementById('zotero-progress');
+  const bar = document.getElementById('zotero-progress-bar');
+  const status = document.getElementById('zotero-progress-status');
+  const percent = document.getElementById('zotero-progress-percent');
+  const details = document.getElementById('zotero-progress-details');
+  const libraryLink = document.getElementById('zotero-library-link');
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    submit.disabled = true;
+    progress.classList.add('active');
+    progress.classList.remove('error');
+    details.replaceChildren();
+    details.hidden = true;
+    libraryLink.hidden = true;
+    bar.style.width = '2%';
+    status.textContent = '正在提交导入请求';
+    percent.textContent = '2%';
+
+    try {
+      const response = await fetch(form.action || window.location.pathname, {
+        method: 'POST',
+        headers: {Accept: 'application/x-ndjson'},
+        body: new FormData(form),
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        throw new Error(result.message || '导入请求失败');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let completed = false;
+      let failure = '';
+      let pdfFailures = 0;
+      const applyLine = (line) => {
+        if (!line.trim()) return;
+        const update = JSON.parse(line);
+        if (!update.ok) { failure = update.message || 'Zotero 导入失败'; return; }
+        const value = Math.max(0, Math.min(100, update.progress || 0));
+        bar.style.width = `${value}%`;
+        percent.textContent = `${value}%`;
+        status.textContent = update.message;
+        completed = Boolean(update.done);
+        if (update.attachment_failure) {
+          const item = document.createElement('li');
+          item.textContent = update.attachment_failure;
+          details.appendChild(item);
+          details.hidden = false;
+        }
+        if (update.done) pdfFailures = update.result?.pdf_failed || 0;
+      };
+
+      while (true) {
+        const {value, done} = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), {stream: !done});
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        lines.forEach(applyLine);
+        if (done) break;
+      }
+      applyLine(buffer);
+      if (failure) throw new Error(failure);
+      if (!completed) throw new Error('导入连接提前结束');
+      if (pdfFailures) {
+        progress.classList.add('error');
+        libraryLink.hidden = false;
+        submit.disabled = false;
+      } else {
+        window.setTimeout(() => { window.location.href = '{% url "library" %}'; }, 700);
+      }
+    } catch (error) {
+      progress.classList.add('error');
+      status.textContent = error.message || 'Zotero 导入失败';
+      percent.textContent = '';
+      submit.disabled = false;
+    }
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

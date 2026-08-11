@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}上传 PDF | PLAB{% endblock %}
+{% block content %}
+<div class="page-head"><p class="eyebrow">PLAB Literature · NJU Box</p><h1>上传 PDF 文献</h1><p class="subtle">原始文件保留在 NJU Box；系统只把有证据支持的 metadata 标为已验证，低置信结果进入待复核。</p></div>
+{% if messages %}{% for message in messages %}<div class="notice">{{ message }}</div>{% endfor %}{% endif %}
+<div class="panel upload-grid">
+  <div>
+    <form id="upload-form" method="post" enctype="multipart/form-data">
+      {% csrf_token %}{{ form.non_field_errors }}
+      <div class="field">{{ form.files.label_tag }}{{ form.files }}{{ form.files.errors }}<p class="help">可一次选择多个 PDF；上传后会提取前两页与嵌入信息，并在发现 DOI 时查询 Crossref。</p></div>
+      <button id="upload-submit" class="primary" type="submit">Start upload</button>
+      <div id="progress" class="progress-wrap" aria-live="polite">
+        <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+        <div class="progress-label"><span id="progress-status">Preparing files</span><span id="progress-percent">0%</span></div>
+      </div>
+    </form>
+  </div>
+  <aside class="side-note"><strong>处理边界</strong><p>相同内容共享同一条规范文献记录。</p><p>发现 DOI 时会在写入 NAS 前预检 BibTeX；失败将停止本次上传。没有 DOI 不受影响。</p></aside>
+</div>
+<script>
+(() => {
+  const form = document.getElementById('upload-form');
+  const submit = document.getElementById('upload-submit');
+  const progress = document.getElementById('progress');
+  const bar = document.getElementById('progress-bar');
+  const status = document.getElementById('progress-status');
+  const percent = document.getElementById('progress-percent');
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const request = new XMLHttpRequest();
+    request.open('POST', form.action || window.location.pathname);
+    request.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+    request.timeout = 900000;
+    submit.disabled = true;
+    progress.classList.add('active');
+    progress.classList.remove('error');
+    status.textContent = 'Sending files to the workspace';
+    request.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      const value = Math.round((event.loaded / event.total) * 100);
+      bar.style.width = `${value}%`;
+      percent.textContent = `${value}%`;
+      if (value === 100) { status.textContent = 'Checking metadata before NAS storage'; percent.textContent = 'Processing'; bar.style.width = ''; bar.classList.add('indeterminate'); }
+    };
+    request.onload = () => {
+      let result = {};
+      try { result = JSON.parse(request.responseText); } catch (error) { result = { ok: false, message: 'Unexpected server response.' }; }
+      if (request.status >= 200 && request.status < 300 && result.ok) {
+        bar.classList.remove('indeterminate'); bar.style.width = '100%'; percent.textContent = '100%'; status.textContent = `Completed ${result.count} file(s)`;
+        window.setTimeout(() => { window.location.href = '{% url "library" %}'; }, 700);
+      } else {
+        bar.classList.remove('indeterminate'); status.textContent = result.message || 'Upload failed'; percent.textContent = '';
+        progress.classList.add('error'); submit.disabled = false;
+        if (result.code === 'doi_bibtex_preflight_failed') { window.alert(result.message); }
+      }
+    };
+    request.onerror = () => { status.textContent = 'Network error'; submit.disabled = false; bar.classList.remove('indeterminate'); };
+    request.ontimeout = () => { status.textContent = 'NJU Box did not respond within 15 minutes'; percent.textContent = ''; submit.disabled = false; bar.classList.remove('indeterminate'); };
+    request.send(new FormData(form));
+  });
+})();
+</script>
+{% endblock %}

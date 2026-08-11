@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}{% if is_my_uploads %}我的上传{% else %}文献库{% endif %} | PLAB{% endblock %}
+{% block content_class %}content-wide{% endblock %}
+{% block content %}
+<div class="page-head">
+  <p class="eyebrow">{% if is_my_uploads %}My Library{% else %}PLAB Literature{% endif %}</p>
+  <h1>{% if is_my_uploads %}我的上传{% else %}文献库{% endif %}</h1>
+  <p class="subtle">{% if is_my_uploads %}仅显示你上传的 PDF，并可在这里删除自己的附件。{% else %}集中查看核心 metadata、摘要、处理状态和常用操作；待复核内容不会自动进入 Agent 上下文。{% endif %}</p>
+</div>
+{% if messages %}{% for message in messages %}<div class="notice{% if message.tags == 'error' %} error{% endif %}" role="status">{{ message }}</div>{% endfor %}{% endif %}
+<section class="library-summary" aria-label="{% if is_my_uploads %}我的上传摘要{% else %}文献库摘要{% endif %}">
+  <div class="library-stat"><strong>{{ record_count }}</strong><span>当前结果</span></div>
+  <div class="library-stat"><strong>{{ review_count }}</strong><span>元数据需处理</span><small>不完整、待复核或冲突 · <a href="{% url list_url_name %}?workflow=review#literature-table">查看并处理</a></small></div>
+  <div class="library-stat"><strong>{{ proposal_review_count }}</strong><span>待我确认</span><small>DeepSeek 建议 · <a href="{% url 'metadata-review-queue' %}">打开审核队列</a></small></div>
+  <div class="library-stat"><strong>{{ published_count }}</strong><span>Agent 可检索</span><small>PDF 上传成功即发布 · <a href="{% url list_url_name %}?workflow=unpublished#literature-table">查看例外</a></small></div>
+</section>
+<p class="library-status-note">PDF 上传成功后会立即向 Agent 发布；元数据仍可继续复核。管理员可通过每条文献“操作”中的“编辑文献”修正信息或处理下架等例外。</p>
+{% if not deepseek_enabled %}<p class="library-status-note">DeepSeek 尚未配置；可以浏览审核入口，但不会向外部 API 发送任何文献内容。</p>{% endif %}
+<div class="home-section-head">
+  <form method="get" class="library-search" role="search">
+    <label for="library-search">{% if is_my_uploads %}搜索我的文献{% else %}搜索文献{% endif %}</label>
+    {% if workflow %}<input type="hidden" name="workflow" value="{{ workflow }}">{% endif %}
+    <div class="library-search-controls">
+      <input id="library-search" type="search" name="q" value="{{ query }}" placeholder="文件名、标题、期刊或 DOI">
+      <select name="journal" aria-label="期刊"><option value="">全部期刊</option>{% for option in journal_options %}<option value="{{ option }}"{% if journal == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select>
+      <select name="year" aria-label="年份"><option value="">全部年份</option>{% for option in year_options %}<option value="{{ option }}"{% if year == option|stringformat:'s' %} selected{% endif %}>{{ option }}</option>{% endfor %}</select>
+      {% if not is_my_uploads %}<select name="uploader" aria-label="上传者"><option value="">全部上传者</option>{% for option in uploader_options %}<option value="{{ option.uploader_id }}"{% if uploader_id == option.uploader_id|stringformat:'s' %} selected{% endif %}>{{ option.uploader__username }}</option>{% endfor %}</select>{% endif %}
+      <button class="primary" type="submit">筛选</button>
+      {% if query or workflow or journal or year or uploader_id %}<a href="{% url list_url_name %}">显示全部</a>{% endif %}
+    </div>
+  </form>
+  <div><a href="{% url 'box-upload' %}">上传 PDF</a> · <a href="{% url 'zotero-import' %}">从 Zotero 导入</a></div>
+</div>
+<div class="table-wrap" id="literature-table">
+  <table class="literature-table">
+    <thead>
+      <tr>
+        <th class="title-column">标题</th>
+        <th class="authors-column">作者</th>
+        <th class="source-column">期刊与年份</th>
+        <th class="abstract-column">摘要</th>
+        <th class="status-column">状态</th>
+        <th class="actions-column">操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for literature in page.object_list %}
+      <tr>
+        <td class="title-column">
+          <div class="file-name">{{ literature.title|default:"未识别标题" }}</div>
+          <div class="file-meta">DOI：{{ literature.doi|default:"—" }}</div>
+        </td>
+        <td class="authors-column">
+          <div class="authors-inline">{% for author in literature.authors %}{{ author.name|default:"姓名未知" }}{% if not forloop.last %}、{% endif %}
+          {% empty %}<span class="subtle">作者未知</span>{% endfor %}
+          </div>
+        </td>
+        <td class="source-column"><div class="source-facts"><strong>{{ literature.journal|default:"期刊未知" }}</strong><span class="file-meta">{{ literature.publication_year|default:"年份未知" }}</span></div></td>
+        <td class="abstract-column">
+          {% if literature.abstract %}<p class="abstract-preview" title="{{ literature.abstract }}">{{ literature.abstract }}</p>{% else %}<span class="subtle">暂无摘要</span>{% endif %}
+        </td>
+        <td class="status-column">
+          <div class="status-stack">
+          <span class="tag{% if literature.metadata_status == 'conflict' %} exact{% endif %}">{% if literature.metadata_status == 'verified' %}已验证{% elif literature.metadata_status == 'incomplete' %}信息不完整{% elif literature.metadata_status == 'needs_review' %}待复核{% elif literature.metadata_status == 'conflict' %}存在冲突{% else %}待解析{% endif %}</span>
+          <span class="tag">{% if literature.index_status == 'published' %}已发布{% else %}未发布{% endif %}</span>
+          <div class="file-meta">来源：{{ literature.metadata_source|default:"暂无" }}</div>
+          <div class="file-meta">置信度：{% if literature.metadata_confidence != None %}{{ literature.metadata_confidence }}{% else %}—{% endif %}</div>
+          </div>
+        </td>
+        <td class="actions-column">
+          <div class="row-actions">
+          {% with proposal=literature.latest_metadata_proposal %}
+            {% if proposal %}
+              {% if proposal.status == 'succeeded' and literature.can_review_ai_metadata %}<a class="row-action" href="{% url 'metadata-review-detail' proposal.pk %}">确认 AI metadata</a>
+              {% elif proposal.status == 'failed' and literature.can_review_ai_metadata %}<form method="post" action="{% url 'metadata-review-regenerate' proposal.pk %}">{% csrf_token %}<button class="link-button" type="submit">重新生成 AI 建议</button></form>
+              {% elif proposal.status == 'queued' or proposal.status == 'running' %}<span class="file-meta">AI 补全处理中</span>
+              {% endif %}
+            {% elif literature.can_review_ai_metadata and literature.metadata_status != 'verified' %}
+              <form method="post" action="{% url 'metadata-review-enqueue' literature.pk %}">{% csrf_token %}<button class="link-button" type="submit">生成 AI 建议</button></form>
+            {% endif %}
+          {% endwith %}
+          {% if request.user.is_staff %}
+          <a class="row-action" href="{% url 'admin:box_upload_canonicaldocument_change' literature.pk %}">编辑文献</a>
+          {% endif %}
+          </div>
+          {% for upload in literature.uploads.all %}
+          <div class="attachment-item">
+            <div class="file-meta">上传者：{{ upload.uploader.username }}</div>
+            <div class="row-actions">
+              <a class="row-action primary-action" href="{% url 'view-document' upload.pk %}" target="_blank" rel="noopener">在线打开</a>
+              <a class="row-action" href="{% url 'download-document' upload.pk %}">下载</a>
+              {% if is_my_uploads %}<form method="post" action="{% url 'delete-upload' upload.pk %}" onsubmit="return confirm('确认删除 {{ upload.original_name|escapejs }}？此操作不可恢复。')">{% csrf_token %}<button class="link-button danger-action" type="submit">删除</button></form>{% endif %}
+            </div>
+          </div>
+          {% empty %}<span class="subtle">无 PDF</span>{% endfor %}
+        </td>
+      </tr>
+      {% empty %}<tr><td colspan="6">尚无文献记录。</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if page.has_other_pages %}
+<nav class="pager" aria-label="文献库分页"><span>第 {{ page.number }} / {{ page.paginator.num_pages }} 页</span><span class="pager-nav">{% if page.has_previous %}<a href="?{% if pagination_query %}{{ pagination_query }}&{% endif %}page={{ page.previous_page_number }}">上一页</a>{% endif %}{% if page.has_next %}<a href="?{% if pagination_query %}{{ pagination_query }}&{% endif %}page={{ page.next_page_number }}">下一页</a>{% endif %}</span></nav>
+{% endif %}
+{% endblock %}
