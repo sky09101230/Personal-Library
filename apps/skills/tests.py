@@ -456,6 +456,7 @@ class SkillSyncJobViewTests(TestCase):
         response = self.client.get("/skills/")
 
         self.assertContains(response, "重新生成正式 Skill 摘要")
+        self.assertContains(response, 'submitter.getAttribute("formaction") || form.action')
 
     def test_staff_can_edit_generated_description(self):
         source = GitHubSkillSource.objects.create(
