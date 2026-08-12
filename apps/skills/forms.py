@@ -18,6 +18,13 @@ class GitHubSkillSearchForm(forms.Form):
     )
 
 
+class GitHubSkillImportForm(forms.Form):
+    owner = forms.CharField(max_length=100, widget=forms.HiddenInput)
+    repository = forms.CharField(max_length=100, widget=forms.HiddenInput)
+    path = forms.CharField(max_length=500, widget=forms.HiddenInput)
+    q = forms.CharField(max_length=80, required=False, widget=forms.HiddenInput)
+
+
 class SkillDescriptionForm(forms.Form):
     description = forms.CharField(
         label="展示描述",

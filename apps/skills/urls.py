@@ -7,6 +7,7 @@ urlpatterns = [
     path("", views.index, name="skills-index"),
     path("featured/", views.featured, name="skills-featured"),
     path("discover/github/", views.discover_github, name="skills-discover-github"),
+    path("discover/github/import/", views.import_github_candidate, name="skills-import-github"),
     path("submit/", views.submit_candidate, name="skills-submit-candidate"),
     path("candidates/", views.candidates, name="skills-candidates"),
     path("candidates/publish/", views.batch_publish_candidates, name="skills-candidates-batch-publish"),

@@ -1,3 +1,5 @@
+from urllib.parse import urlencode
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.core.paginator import Paginator
@@ -5,6 +7,7 @@ from django.core import signing
 from django.db.models import Prefetch, Q
 from django.http import Http404, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.utils.http import content_disposition_header
 from django.views.decorators.http import require_GET, require_POST
 
@@ -13,8 +16,8 @@ from apps.box_upload.storage import NAS_WEBDAV
 
 from .downloads import load_skill_download_token
 from .candidate_services import CandidatePublishError, CandidateValidationError, create_uploaded_candidate, publish_candidate, reject_candidate
-from .forms import GitHubSkillSearchForm, SkillCandidateReviewForm, SkillCandidateUploadForm, SkillDescriptionForm
-from .github_search import GitHubSearchError, search_github_skills
+from .forms import GitHubSkillImportForm, GitHubSkillSearchForm, SkillCandidateReviewForm, SkillCandidateUploadForm, SkillDescriptionForm
+from .github_search import GitHubSearchError, inspect_github_skill_for_import, search_github_skills, upsert_github_skill_source
 from .models import FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillCandidate, SkillPurpose
 from .services import get_or_create_skill_job, mark_job_failed
 from .storage import open_skill_stream
@@ -106,6 +109,50 @@ def discover_github(request):
         "search_result": search_result,
         "search_error": search_error,
     })
+
+
+@login_required
+@user_passes_test(lambda user: user.is_staff)
+@require_POST
+def import_github_candidate(request):
+    form = GitHubSkillImportForm(request.POST)
+    query = request.POST.get("q", "").strip()
+    target = reverse("skills-discover-github")
+    if query:
+        target = f"{target}?{urlencode({'q': query})}"
+    if not form.is_valid():
+        messages.error(request, "导入信息无效，请重新搜索后再试。")
+        return redirect(target)
+    try:
+        selection = inspect_github_skill_for_import(
+            form.cleaned_data["owner"],
+            form.cleaned_data["repository"],
+            form.cleaned_data["path"],
+        )
+    except GitHubSearchError as exc:
+        messages.error(request, str(exc))
+        return redirect(target)
+
+    job, created = get_or_create_skill_job(request.user, SkillSyncJob.SCAN)
+    if not created:
+        messages.info(request, "已有 Skills 后台任务正在处理，请完成后再导入。")
+        return redirect(target)
+    try:
+        source = upsert_github_skill_source(selection)
+        launch_scan_job(
+            job.pk,
+            source_id=source.pk,
+            source_path=selection["source_path"],
+            expected_commit=selection["commit"],
+            license_path=selection["license_path"],
+            license_spdx=selection["license_spdx"],
+        )
+    except Exception as exc:
+        mark_job_failed(job, f"无法启动所选 GitHub Skill 的候选扫描: {exc}")
+        messages.error(request, "无法启动导入任务，请稍后再试。")
+        return redirect(target)
+    messages.success(request, "已开始检查所选 Skill；它只会进入候选池，不会直接发布。")
+    return redirect("skills-index")
 
 
 @login_required

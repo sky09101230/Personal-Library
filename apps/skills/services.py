@@ -287,8 +287,15 @@ def _read_metadata(content):
     return metadata
 
 
-def _archive_directory(source_directory, archive_path):
+def _archive_directory(source_directory, archive_path, license_file=None):
     with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
         for path in source_directory.rglob("*"):
+            if path.is_symlink():
+                raise SkillSyncError("Skill directory contains a symbolic link and cannot be archived.")
             if path.is_file() and "__pycache__" not in path.parts and ".git" not in path.parts:
                 archive.write(path, path.relative_to(source_directory.parent))
+        if license_file is not None:
+            archive.write(
+                license_file,
+                Path(source_directory.name) / "_repository_license" / license_file.name,
+            )

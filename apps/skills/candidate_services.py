@@ -197,7 +197,14 @@ def enrich_candidate(candidate, document):
     return candidate
 
 
-def scan_github_candidates(job=None, source_id=None):
+def scan_github_candidates(
+    job=None,
+    source_id=None,
+    source_path=None,
+    expected_commit=None,
+    license_path=None,
+    license_spdx=None,
+):
     _start_job(job)
     sources = GitHubSkillSource.objects.filter(is_enabled=True)
     if source_id is not None:
@@ -205,6 +212,8 @@ def scan_github_candidates(job=None, source_id=None):
     sources = list(sources)
     if not sources:
         raise _fail_job(job, "Selected GitHub skill source is not enabled or does not exist.")
+    if source_path is not None and len(sources) != 1:
+        raise _fail_job(job, "A selected Skill directory requires exactly one GitHub source.")
     storage = get_nas_skill_candidate_storage()
     try:
         storage.ensure_root()
@@ -217,7 +226,15 @@ def scan_github_candidates(job=None, source_id=None):
     for source in sources:
         _update_job(job, current_source=source.name, current_skill="")
         try:
-            results.append(_scan_source(source, storage, job=job))
+            scan_options = {}
+            if source_path is not None:
+                scan_options = {
+                    "source_path": source_path,
+                    "expected_commit": expected_commit,
+                    "license_path": license_path,
+                    "license_spdx": license_spdx,
+                }
+            results.append(_scan_source(source, storage, job=job, **scan_options))
         except SkillSyncError as exc:
             errors.append(str(exc))
             if job is not None:
@@ -235,7 +252,15 @@ def scan_github_candidates(job=None, source_id=None):
     return results
 
 
-def _scan_source(source, storage, job=None):
+def _scan_source(
+    source,
+    storage,
+    job=None,
+    source_path=None,
+    expected_commit=None,
+    license_path=None,
+    license_spdx=None,
+):
     with tempfile.TemporaryDirectory(prefix="plab-skill-scan-") as temporary_directory:
         repository = Path(temporary_directory) / "repository"
         clone_args = ["clone", "--depth", "1"]
@@ -247,7 +272,20 @@ def _scan_source(source, storage, job=None):
         except SkillSyncError as exc:
             raise SkillSyncError(f"{source.name}: {exc}") from exc
         commit = _run_git("-C", str(repository), "rev-parse", "HEAD").strip()
-        skill_files = list(repository.rglob("SKILL.md"))
+        if expected_commit and commit.casefold() != expected_commit.casefold():
+            raise SkillSyncError(f"{source.name}: 仓库已有新提交，请重新搜索后再导入。")
+        repository_root = repository.resolve()
+        license_file = _repository_file(repository_root, license_path) if license_path else None
+        if license_file is not None and (license_file.is_symlink() or not license_file.is_file()):
+            raise SkillSyncError(f"{source.name}: 仓库许可证文件已不存在，请重新搜索后再导入。")
+        if source_path is None:
+            skill_files = list(repository.rglob("SKILL.md"))
+        else:
+            skill_directory = _repository_file(repository_root, source_path, allow_root=True)
+            skill_file = skill_directory / "SKILL.md"
+            if skill_file.is_symlink() or not skill_file.is_file():
+                raise SkillSyncError(f"{source.name}: 所选 SKILL.md 已不存在，请重新搜索后再导入。")
+            skill_files = [skill_file]
         if job is not None:
             _update_job(job, skills_total=job.skills_total + len(skill_files))
         refreshed = []
@@ -255,7 +293,10 @@ def _scan_source(source, storage, job=None):
         for index, skill_file in enumerate(skill_files):
             source_path = skill_file.parent.relative_to(repository).as_posix()
             archive_path = Path(temporary_directory) / f"candidate-{index}.zip"
-            _archive_directory(skill_file.parent, archive_path)
+            if license_file is None or license_file.is_relative_to(skill_file.parent):
+                _archive_directory(skill_file.parent, archive_path)
+            else:
+                _archive_directory(skill_file.parent, archive_path, license_file=license_file)
             with archive_path.open("rb") as raw:
                 archive = File(raw, name=f"{source.slug}-{skill_file.parent.name}-{commit[:12]}.zip")
                 try:
@@ -264,6 +305,8 @@ def _scan_source(source, storage, job=None):
                     _update_job(job, skipped_count=(job.skipped_count + 1) if job is not None else 0, skills_processed=(job.skills_processed + 1) if job is not None else 0)
                     skipped.append((source_path, str(exc)))
                     continue
+                if license_spdx:
+                    inspected["warnings"].append(f"GitHub 仓库许可证：{license_spdx}（已随快照保存）。")
                 _update_job(job, current_skill=inspected["name"])
                 candidate = SkillCandidate.objects.filter(source=source, source_path=source_path).first()
                 if candidate and candidate.content_sha256 == inspected["content_sha256"]:
@@ -312,6 +355,23 @@ def _scan_source(source, storage, job=None):
             refreshed.append(candidate)
             _update_job(job, uploaded_count=(job.uploaded_count + 1) if job is not None else 0, skills_processed=(job.skills_processed + 1) if job is not None else 0)
         return source, refreshed, skipped, commit
+
+
+def _repository_file(repository_root, relative_path, allow_root=False):
+    relative_path = str(relative_path or "")
+    path = PurePosixPath(relative_path)
+    if (
+        "\\" in relative_path
+        or "\0" in relative_path
+        or path.is_absolute()
+        or ".." in path.parts
+        or (not path.parts and not allow_root)
+    ):
+        raise SkillSyncError("GitHub repository path is invalid.")
+    resolved = repository_root.joinpath(*path.parts).resolve()
+    if not resolved.is_relative_to(repository_root):
+        raise SkillSyncError("GitHub repository path escapes the repository.")
+    return resolved
 
 
 def publish_candidate(candidate, reviewer, formal_storage=None, candidate_storage=None):

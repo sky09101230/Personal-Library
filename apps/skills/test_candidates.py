@@ -18,7 +18,7 @@ from .candidate_services import (
     scan_github_candidates,
 )
 from .models import GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillCandidate, SkillPurpose, SkillSyncJob
-from .services import _read_metadata
+from .services import SkillSyncError, _archive_directory, _read_metadata
 
 
 def skill_zip(files, name="skill.zip"):
@@ -60,6 +60,12 @@ class CandidateArchiveTests(TestCase):
             inspect_skill_zip(first)["content_sha256"],
             inspect_skill_zip(second)["content_sha256"],
         )
+
+    def test_repository_archive_rejects_symbolic_links(self):
+        source = MagicMock()
+        source.rglob.return_value = [MagicMock(is_symlink=MagicMock(return_value=True))]
+        with self.assertRaisesMessage(SkillSyncError, "symbolic link"):
+            _archive_directory(source, BytesIO())
 
 
 class CandidateWorkflowTests(TestCase):
