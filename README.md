@@ -25,7 +25,7 @@ python manage.py createsuperuser
 
 按提示输入用户名、邮箱和密码。创建后访问 `http://127.0.0.1:8000/admin/`。
 
-在 `GitHub skill sources` 中添加或管理 Skills 来源（名称、仓库地址、可选分支和启用状态）。回到 `/skills/` 后，管理员点击“扫描到候选池”；扫描只更新私有候选，不会直接出现在正式 Skills 广场或 MCP 中。管理员在“候选审核”中确认内容、用途和说明后，才能批准并发布正式版本。
+管理员可在 Skills 广场点击“搜索 GitHub Skill”，按关键词查找公开仓库中的 `SKILL.md`；必须配置仅能读取公开资源的 `GITHUB_API_TOKEN`，没有 GitHub 可识别许可证的结果不能导入。也可以继续在 `GitHub skill sources` 中管理固定来源并扫描整个仓库。两种方式都只更新私有候选，不会直接出现在正式 Skills 广场或 MCP 中；管理员在“候选审核”中确认内容、用途和说明后，才能批准并发布正式版本。
 
 在 `Skill purposes` 中先添加大用途，再添加父级为该大用途的小用途；随后在 `Shared skills` 中为每个 Skill 选择小用途。要发布管理员精选，在 `Featured skills` 中选择一个 Skill、填写一句推荐语并设置排序值。
 
