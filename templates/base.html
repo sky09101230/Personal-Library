@@ -163,7 +163,9 @@
     .skill-card h3 { margin: 0 0 6px; font-size: 17px; }
     .skill-card p { margin: 0; color: var(--muted); font-size: 13px; }
     .skill-card-meta { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; }
-    .skill-card-actions { display: flex; gap: 14px; }
+    .skill-card-actions { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
+    .skill-card-links { display: flex; gap: 14px; }
+    .skill-card-source { color: var(--muted); font-size: 11px; text-align: right; }
     .skill-description-form textarea { width: 100%; border: 1px solid #bac4d1; border-radius: 4px; padding: 10px 11px; background: #fff; font: inherit; }
     .skill-description-form textarea:focus { outline: 2px solid rgba(92, 43, 131, .2); border-color: var(--accent); }
     .purpose-tabs, .subpurpose-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -182,7 +184,9 @@
     .subpurpose-tab.active { border-color: var(--accent); color: var(--accent); background: #faf7fd; }
     .purpose-panel { min-height: 260px; }
     .purpose-panel.hidden, .subpurpose-panel.hidden { display: none; }
-    .subpurpose-tabs { margin-bottom: 16px; }
+    .subpurpose-tabs { margin: -2px 0 16px 8px; }
+    .subpurpose-tab { border-color: transparent; background: transparent; color: var(--muted); padding: 5px 8px; font-size: 13px; }
+    .subpurpose-tab.active { border-color: var(--line); background: var(--panel); }
     .featured-skill-card { min-height: 220px; }
     .featured-note { margin-bottom: 12px !important; color: var(--ink) !important; font-weight: 650; }
     .sync-progress { max-width: 680px; margin-top: 16px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }

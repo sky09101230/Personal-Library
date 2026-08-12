@@ -78,6 +78,7 @@ class SkillsPageTests(TestCase):
         self.assertContains(response, "文献工作")
         self.assertContains(response, "文献提取")
         self.assertContains(response, "文献筛选")
+        self.assertContains(response, "来源：PLAB Shared Skills")
         self.assertContains(response, "/skills/plab-shared-skills/pdf2md/")
         self.assertContains(response, "/skills/plab-shared-skills/literature-filter/")
 
