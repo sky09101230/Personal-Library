@@ -27,8 +27,8 @@ from .metadata import (
     resolve_pdf_metadata,
     select_pdf_doi,
 )
-from .models import CanonicalDocument, ExternalReference, UploadedDocument
-from .zotero import import_zotero_library
+from .models import CanonicalDocument, ExternalReference, UploadedDocument, ZoteroConnection
+from .zotero import ZoteroImportError, decrypt_zotero_api_key, encrypt_zotero_api_key, import_zotero_library
 
 
 class UploadPageTests(TestCase):
@@ -594,29 +594,32 @@ class UploadPageTests(TestCase):
             f"/admin/box_upload/canonicaldocument/{needs_review.pk}/change/",
         )
 
-    @patch("apps.box_upload.views.import_zotero_library", return_value={
-        "created": 2,
-        "reused": 1,
-        "skipped": 3,
-        "pdf_imported": 1,
-        "pdf_reused": 0,
-        "pdf_skipped": 2,
-        "pdf_failed": 0,
-    })
-    def test_zotero_import_uses_request_scoped_credentials(self, import_library):
+    @patch("apps.box_upload.views.fetch_zotero_collections", return_value=[{"name": "Physics", "key": "COLL1234"}])
+    def test_zotero_connect_saves_encrypted_credentials(self, fetch_collections):
         self.user.is_staff = True
         self.user.save(update_fields=["is_staff"])
         response = self.client.post("/zotero/import/", data={
+            "action": "connect",
             "library_type": "users",
             "library_id": "123",
-            "collection_key": "ABC",
             "api_key": "secret-key",
         })
 
-        self.assertRedirects(response, "/library/")
-        import_library.assert_called_once_with(
-            "users", "123", "secret-key", collection_key="ABC", uploader=self.user
-        )
+        self.assertEqual(response.json()["collections"], [{"name": "Physics", "key": "COLL1234"}])
+        connection = ZoteroConnection.objects.get(user=self.user)
+        self.assertNotIn("secret-key", connection.api_key_ciphertext)
+        self.assertEqual(decrypt_zotero_api_key(connection.api_key_ciphertext), "secret-key")
+        fetch_collections.assert_called_once_with("users", "123", "secret-key")
+
+        ciphertext = connection.api_key_ciphertext
+        fetch_collections.side_effect = ZoteroImportError("invalid credentials")
+        failed = self.client.post("/zotero/import/", data={
+            "action": "connect", "library_type": "users", "library_id": "999", "api_key": "wrong-key",
+        })
+        connection.refresh_from_db()
+        self.assertEqual(failed.status_code, 400)
+        self.assertEqual(connection.api_key_ciphertext, ciphertext)
+        self.assertNotContains(failed, "wrong-key", status_code=400)
 
     def test_external_reference_admin_delete_removes_orphan_canonical(self):
         canonical = CanonicalDocument.objects.create(title="Zotero orphan", metadata_source="zotero")
@@ -662,8 +665,7 @@ class UploadPageTests(TestCase):
         self.assertFalse(CanonicalDocument.objects.filter(pk=orphan.pk).exists())
         self.assertTrue(CanonicalDocument.objects.filter(pk=attached.pk).exists())
 
-    @patch("apps.box_upload.views.import_zotero_library")
-    def test_zotero_import_is_upgrade_only_for_members(self, import_library):
+    def test_zotero_import_is_upgrade_only_for_members(self):
         page = self.client.get("/zotero/import/")
         post = self.client.post("/zotero/import/", data={
             "library_type": "users",
@@ -674,7 +676,6 @@ class UploadPageTests(TestCase):
         self.assertContains(page, "正在测试升级当中")
         self.assertNotContains(page, "zotero-import-form")
         self.assertEqual(post.status_code, 403)
-        import_library.assert_not_called()
 
     @patch("apps.box_upload.views.iter_zotero_import_library", return_value=iter((
         {"progress": 5, "message": "正在连接 Zotero"},
@@ -683,10 +684,15 @@ class UploadPageTests(TestCase):
     def test_staff_zotero_import_streams_progress(self, import_library):
         self.user.is_staff = True
         self.user.save(update_fields=["is_staff"])
+        ZoteroConnection.objects.create(
+            user=self.user,
+            library_type="users",
+            library_id="123",
+            api_key_ciphertext=encrypt_zotero_api_key("secret-key"),
+        )
         response = self.client.post("/zotero/import/", data={
-            "library_type": "users",
-            "library_id": "123",
-            "api_key": "secret-key",
+            "action": "import",
+            "item_keys": ["ITEM1234", "ITEM5678"],
         }, HTTP_ACCEPT="application/x-ndjson")
 
         events = [json.loads(line) for line in b"".join(response.streaming_content).decode().splitlines()]
@@ -694,7 +700,64 @@ class UploadPageTests(TestCase):
         self.assertTrue(events[-1]["done"])
         self.assertEqual(response["X-Accel-Buffering"], "no")
         import_library.assert_called_once_with(
-            "users", "123", "secret-key", collection_key="", uploader=self.user
+            "users",
+            "123",
+            "secret-key",
+            item_keys=["ITEM1234", "ITEM5678"],
+            browser_pdfs={},
+            uploader=self.user,
+        )
+
+    @patch("apps.box_upload.views.iter_zotero_import_library", return_value=iter((
+        {"progress": 100, "message": "导入完成", "result": {"pdf_failed": 0}, "done": True},
+    )))
+    def test_zotero_import_accepts_only_pdf_bound_to_selected_item(self, import_library):
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_staff"])
+        ZoteroConnection.objects.create(
+            user=self.user,
+            library_type="users",
+            library_id="123",
+            api_key_ciphertext=encrypt_zotero_api_key("secret-key"),
+        )
+        selected = SimpleUploadedFile("selected.pdf", b"%PDF-1.7\nselected", content_type="application/pdf")
+        forged = SimpleUploadedFile("forged.pdf", b"%PDF-1.7\nforged", content_type="application/pdf")
+
+        response = self.client.post("/zotero/import/", data={
+            "action": "import",
+            "item_keys": ["ITEM1234"],
+            "pdf_ITEM1234": selected,
+            "pdf_OTHER123": forged,
+        }, HTTP_ACCEPT="application/x-ndjson")
+        list(response.streaming_content)
+
+        browser_pdfs = import_library.call_args.kwargs["browser_pdfs"]
+        self.assertEqual(list(browser_pdfs), ["ITEM1234"])
+        self.assertEqual(browser_pdfs["ITEM1234"].name, "selected.pdf")
+
+    @patch("apps.box_upload.views.fetch_zotero_items")
+    def test_staff_browses_collection_items(self, fetch_items):
+        self.user.is_staff = True
+        self.user.save(update_fields=["is_staff"])
+        ZoteroConnection.objects.create(
+            user=self.user,
+            library_type="users",
+            library_id="123",
+            api_key_ciphertext=encrypt_zotero_api_key("secret-key"),
+        )
+        fetch_items.return_value = [{
+            "key": "ITEM1234",
+            "version": 1,
+            "data": {"itemType": "journalArticle", "title": "Selected paper", "creators": []},
+        }]
+
+        response = self.client.post("/zotero/import/", data={"action": "items", "collection_key": "COLL1234"})
+
+        self.assertEqual(response.json()["items"][0], {
+            "key": "ITEM1234", "title": "Selected paper", "year": None, "authors": [],
+        })
+        fetch_items.assert_called_once_with(
+            "users", "123", "secret-key", collection_key="COLL1234"
         )
 
     @patch("apps.box_upload.views.open_literature_stream")
@@ -1375,6 +1438,63 @@ class ZoteroImportTests(TestCase):
         self.assertIn("正在处理第 1/1 条文献", events[-2]["message"])
         self.assertTrue(events[-1]["done"])
 
+    def test_selected_item_keys_are_sent_to_zotero(self):
+        urls = []
+
+        def request_page(url, api_key):
+            urls.append(url)
+            return ([], {})
+
+        result = import_zotero_library(
+            "users", "123", "secret-key", item_keys=["ABCD1234"], request_page=request_page
+        )
+
+        self.assertIn("itemKey=ABCD1234", urls[0])
+        self.assertEqual(result["created"], 0)
+
+    def test_browser_pdf_has_priority_and_invalid_file_preserves_metadata(self):
+        user = User.objects.create_user(username="zotero-browser", password="test-pass")
+        store_file = MagicMock(return_value=StoredLiteratureObject(NAS_WEBDAV, "/zotero/browser.pdf"))
+        request_file = MagicMock()
+        valid_result = import_zotero_library(
+            "users",
+            "123",
+            "secret-key",
+            uploader=user,
+            browser_pdfs={"ITEM123": SimpleUploadedFile("browser.pdf", b"%PDF-1.7\nbrowser")},
+            request_page=self._request_page,
+            request_file=request_file,
+            store_file=store_file,
+        )
+
+        self.assertEqual(valid_result["pdf_browser"], 1)
+        self.assertEqual(valid_result["pdf_imported"], 1)
+        self.assertEqual(UploadedDocument.objects.get().original_name, "browser.pdf")
+        request_file.assert_not_called()
+
+        def invalid_request_page(url, api_key):
+            return ([{
+                "key": "BADF1234",
+                "version": 1,
+                "data": {"itemType": "journalArticle", "title": "Metadata survives", "creators": []},
+            }], {})
+
+        invalid_result = import_zotero_library(
+            "users",
+            "456",
+            "secret-key",
+            uploader=user,
+            browser_pdfs={"BADF1234": SimpleUploadedFile("wrong.pdf", b"not a pdf")},
+            request_page=invalid_request_page,
+            request_file=request_file,
+            store_file=store_file,
+        )
+        self.assertEqual(invalid_result["pdf_failed"], 1)
+        self.assertEqual(CanonicalDocument.objects.count(), 2)
+        self.assertEqual(ExternalReference.objects.filter(library_id="456").count(), 1)
+        self.assertEqual(UploadedDocument.objects.count(), 1)
+        request_file.assert_not_called()
+
     def test_imports_only_hosted_pdfs_and_isolates_one_failure(self):
         user = User.objects.create_user(username="zotero-admin", password="test-pass")
         valid_pdf = b"%PDF-1.7\ncontent"
@@ -1497,3 +1617,45 @@ class ZoteroImportTests(TestCase):
             )
 
         storage.delete.assert_called_once_with("/zotero/orphan.pdf")
+
+    def test_prefers_local_pdf_then_falls_back_to_web(self):
+        from .zotero import ZoteroImportError, _import_zotero_pdf
+
+        user = User.objects.create_user(username="zotero-local", password="test-pass")
+        web_file = MagicMock(return_value=BytesIO(b"%PDF-1.7\nweb"))
+        store_file = MagicMock(side_effect=[
+            StoredLiteratureObject(NAS_WEBDAV, "/zotero/local.pdf"),
+            StoredLiteratureObject(NAS_WEBDAV, "/zotero/web.pdf"),
+        ])
+        local_attachment = {"item_key": "LOCAL123", "filename": "local.pdf"}
+        web_attachment = {"item_key": "WEBF1234", "filename": "web.pdf"}
+
+        local_outcome = _import_zotero_pdf(
+            CanonicalDocument.objects.create(title="Local"),
+            user,
+            "users",
+            "123",
+            "secret-key",
+            local_attachment,
+            request_file=web_file,
+            store_file=store_file,
+            local_api_available=True,
+            request_local_text=lambda _url: "file:///C:/Zotero/storage/local.pdf",
+            open_local_file=lambda _path, _mode: BytesIO(b"%PDF-1.7\nlocal"),
+        )
+        web_outcome = _import_zotero_pdf(
+            CanonicalDocument.objects.create(title="Web"),
+            user,
+            "users",
+            "123",
+            "secret-key",
+            web_attachment,
+            request_file=web_file,
+            store_file=store_file,
+            local_api_available=True,
+            request_local_text=MagicMock(side_effect=ZoteroImportError("local unavailable")),
+        )
+
+        self.assertEqual((local_outcome, local_attachment["_pdf_source"]), ("imported", "local"))
+        self.assertEqual((web_outcome, web_attachment["_pdf_source"]), ("imported", "web"))
+        self.assertEqual(web_file.call_count, 1)

@@ -85,6 +85,14 @@ class ExternalReference(models.Model):
         return f"{self.provider}:{self.library_id}:{self.external_item_id}"
 
 
+class ZoteroConnection(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="zotero_connection")
+    library_type = models.CharField(max_length=16, choices=(("users", "User"), ("groups", "Group")))
+    library_id = models.CharField(max_length=255)
+    api_key_ciphertext = models.TextField()
+    updated_at = models.DateTimeField(auto_now=True)
+
+
 class UploadedDocument(models.Model):
     class StorageBackend(models.TextChoices):
         NJU_BOX = "nju_box", "NJU Box"

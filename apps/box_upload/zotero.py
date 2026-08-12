@@ -1,10 +1,13 @@
+import base64
 import hashlib
 import json
 import re
 import tempfile
-from urllib.parse import quote, urlsplit
-from urllib.request import Request, urlopen
+from pathlib import Path
+from urllib.parse import quote, urlencode, urlsplit
+from urllib.request import Request, url2pathname, urlopen
 
+from cryptography.fernet import Fernet, InvalidToken
 from django.conf import settings
 from django.core.files import File
 from django.db import transaction
@@ -23,10 +26,15 @@ def import_zotero_library(
     library_id,
     api_key,
     collection_key="",
+    item_keys=None,
+    browser_pdfs=None,
     uploader=None,
     request_page=None,
     request_file=None,
     store_file=None,
+    local_api_available=None,
+    request_local_text=None,
+    open_local_file=None,
 ):
     result = None
     for event in iter_zotero_import_library(
@@ -34,10 +42,15 @@ def import_zotero_library(
         library_id,
         api_key,
         collection_key=collection_key,
+        item_keys=item_keys,
+        browser_pdfs=browser_pdfs,
         uploader=uploader,
         request_page=request_page,
         request_file=request_file,
         store_file=store_file,
+        local_api_available=local_api_available,
+        request_local_text=request_local_text,
+        open_local_file=open_local_file,
     ):
         if event.get("done"):
             result = event["result"]
@@ -49,15 +62,25 @@ def iter_zotero_import_library(
     library_id,
     api_key,
     collection_key="",
+    item_keys=None,
+    browser_pdfs=None,
     uploader=None,
     request_page=None,
     request_file=None,
     store_file=None,
+    local_api_available=None,
+    request_local_text=None,
+    open_local_file=None,
 ):
     yield {"progress": 5, "message": "正在连接 Zotero"}
     items = []
     for page_number, (payload, headers) in enumerate(_iter_zotero_pages(
-        library_type, library_id, api_key, collection_key=collection_key, request_page=request_page
+        library_type,
+        library_id,
+        api_key,
+        collection_key=collection_key,
+        item_keys=item_keys,
+        request_page=request_page,
     ), start=1):
         items.extend(payload)
         total = _total_results(headers)
@@ -73,8 +96,12 @@ def iter_zotero_import_library(
         "pdf_reused": 0,
         "pdf_skipped": 0,
         "pdf_failed": 0,
+        "pdf_local": 0,
+        "pdf_browser": 0,
         "pdf_failures": [],
     }
+    if local_api_available is None:
+        local_api_available = request_page is None and _zotero_local_api_available()
     total = len(items)
     if total:
         yield {"progress": 35, "message": f"正在整理 {total} 条 Zotero 文献"}
@@ -87,6 +114,33 @@ def iter_zotero_import_library(
             result["created" if created else "reused"] += 1
             if uploader is not None:
                 attachment_progress = 35 + round(60 * (index - 1) / total)
+                browser_pdf = (browser_pdfs or {}).get(mapped["item_key"])
+                if browser_pdf is not None:
+                    yield {
+                        "progress": attachment_progress,
+                        "message": f"正在上传浏览器 PDF：{browser_pdf.name}",
+                    }
+                    try:
+                        outcome = _import_browser_pdf(canonical, uploader, browser_pdf, store_file=store_file)
+                    except Exception as exc:
+                        failure = _record_pdf_failure(result, browser_pdf.name, exc, api_key)
+                        yield {
+                            "progress": attachment_progress,
+                            "message": f"浏览器 PDF 导入失败：{failure}",
+                            "attachment_failure": failure,
+                        }
+                    else:
+                        result[f"pdf_{outcome}"] += 1
+                        result["pdf_browser"] += 1
+                        yield {
+                            "progress": attachment_progress,
+                            "message": f"已从浏览器上传：{browser_pdf.name}",
+                        }
+                    yield {
+                        "progress": 35 + round(60 * index / total),
+                        "message": f"正在处理第 {index}/{total} 条文献",
+                    }
+                    continue
                 try:
                     children = fetch_zotero_children(
                         library_type,
@@ -125,6 +179,9 @@ def iter_zotero_import_library(
                                 attachment,
                                 request_file=request_file,
                                 store_file=store_file,
+                                local_api_available=local_api_available,
+                                request_local_text=request_local_text,
+                                open_local_file=open_local_file,
                             )
                         except Exception as exc:
                             failure = _record_pdf_failure(result, attachment["filename"], exc, api_key)
@@ -135,6 +192,17 @@ def iter_zotero_import_library(
                             }
                         else:
                             result[f"pdf_{outcome}"] += 1
+                            source = attachment.get("_pdf_source", "web")
+                            if source == "local":
+                                result["pdf_local"] += 1
+                            yield {
+                                "progress": attachment_progress,
+                                "message": (
+                                    f"已从 Zotero Desktop 读取：{attachment['filename']}"
+                                    if source == "local"
+                                    else f"已从 Zotero Web 读取：{attachment['filename']}"
+                                ),
+                            }
         yield {
             "progress": 35 + round(60 * index / total),
             "message": f"正在处理第 {index}/{total} 条文献",
@@ -144,20 +212,53 @@ def iter_zotero_import_library(
         "message": (
             f"导入完成：文献新增 {result['created']}，复用 {result['reused']}，跳过 {result['skipped']}；"
             f"PDF 导入 {result['pdf_imported']}，复用 {result['pdf_reused']}，"
-            f"跳过 {result['pdf_skipped']}，失败 {result['pdf_failed']}"
+            f"跳过 {result['pdf_skipped']}，失败 {result['pdf_failed']}，其中浏览器上传 {result['pdf_browser']}"
         ),
         "result": result,
         "done": True,
     }
 
 
-def fetch_zotero_items(library_type, library_id, api_key, collection_key="", request_page=None):
+def fetch_zotero_items(
+    library_type, library_id, api_key, collection_key="", item_keys=None, request_page=None
+):
     items = []
     for payload, _headers in _iter_zotero_pages(
-        library_type, library_id, api_key, collection_key=collection_key, request_page=request_page
+        library_type,
+        library_id,
+        api_key,
+        collection_key=collection_key,
+        item_keys=item_keys,
+        request_page=request_page,
     ):
         items.extend(payload)
     return items
+
+
+def fetch_zotero_collections(library_type, library_id, api_key, request_page=None):
+    base_url, library_path, base_parts = _zotero_library_context(library_type, library_id, api_key)
+    next_url = f"{base_url}{library_path}/collections?format=json&limit=100"
+    collections = []
+    for payload, _headers in _iter_json_pages(next_url, api_key, request_page, base_parts):
+        for item in payload:
+            data = item.get("data") or {}
+            if item.get("key") and data.get("name"):
+                collections.append({"key": str(item["key"]), "name": str(data["name"])})
+    return sorted(collections, key=lambda item: item["name"].casefold())
+
+
+def summarize_zotero_items(items):
+    summaries = []
+    for item in items:
+        mapped = map_zotero_item(item)
+        if mapped:
+            summaries.append({
+                "key": mapped["item_key"],
+                "title": mapped["title"] or "（无标题）",
+                "year": mapped["publication_year"],
+                "authors": [author["name"] for author in mapped["authors"]],
+            })
+    return summaries
 
 
 def fetch_zotero_children(library_type, library_id, api_key, parent_key, request_page=None):
@@ -171,8 +272,20 @@ def fetch_zotero_children(library_type, library_id, api_key, parent_key, request
     return items
 
 
-def _iter_zotero_pages(library_type, library_id, api_key, collection_key="", request_page=None):
+def _iter_zotero_pages(
+    library_type, library_id, api_key, collection_key="", item_keys=None, request_page=None
+):
     base_url, library_path, base_parts = _zotero_library_context(library_type, library_id, api_key)
+    if item_keys is not None:
+        keys = list(dict.fromkeys(str(key).strip().upper() for key in item_keys))
+        if not keys or len(keys) > 500 or any(not re.fullmatch(r"[A-Z0-9]{8}", key) for key in keys):
+            raise ZoteroImportError("请选择有效的 Zotero 条目。")
+        for start in range(0, len(keys), 50):
+            query = urlencode({"format": "json", "limit": 100, "itemKey": ",".join(keys[start:start + 50])})
+            yield from _iter_json_pages(
+                f"{base_url}{library_path}/items?{query}", api_key, request_page, base_parts
+            )
+        return
     if collection_key.strip():
         item_path = f"/collections/{quote(collection_key.strip(), safe='')}/items/top"
     else:
@@ -193,6 +306,19 @@ def _zotero_library_context(library_type, library_id, api_key):
         raise ZoteroImportError("Zotero API URL must be a valid HTTPS URL.")
     library_path = f"/{library_type}/{quote(str(library_id).strip(), safe='')}"
     return base_url, library_path, base_parts
+
+
+def encrypt_zotero_api_key(api_key):
+    key = base64.urlsafe_b64encode(hashlib.sha256(f"zotero:{settings.SECRET_KEY}".encode()).digest())
+    return Fernet(key).encrypt(api_key.encode()).decode()
+
+
+def decrypt_zotero_api_key(ciphertext):
+    key = base64.urlsafe_b64encode(hashlib.sha256(f"zotero:{settings.SECRET_KEY}".encode()).digest())
+    try:
+        return Fernet(key).decrypt(ciphertext.encode()).decode()
+    except (InvalidToken, ValueError) as exc:
+        raise ZoteroImportError("保存的 Zotero API Key 无法读取，请重新连接。") from exc
 
 
 def _iter_json_pages(next_url, api_key, request_page, base_parts):
@@ -304,60 +430,145 @@ def _import_zotero_pdf(
     attachment,
     request_file=None,
     store_file=None,
+    local_api_available=False,
+    request_local_text=None,
+    open_local_file=None,
 ):
     if canonical.uploads.filter(status=UploadedDocument.Status.UPLOADED).exists():
         already_uploaded = canonical.uploaders.filter(pk=uploader.pk).exists()
         canonical.uploaders.add(uploader)
+        attachment["_pdf_source"] = "existing"
         return "skipped" if already_uploaded else "reused"
 
     base_url, library_path, _base_parts = _zotero_library_context(library_type, library_id, api_key)
     file_url = f"{base_url}{library_path}/items/{quote(attachment['item_key'], safe='')}/file"
     request_file = request_file or _request_file
     store_file = store_file or store_literature
-    digest = hashlib.sha256()
+    source = "web"
 
-    with request_file(file_url, api_key) as response, tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024) as temporary:
-        size = 0
-        while chunk := response.read(64 * 1024):
+    with tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024) as temporary:
+        local_stream = None
+        if local_api_available:
+            try:
+                local_stream = _open_local_zotero_file(
+                    library_type,
+                    library_id,
+                    attachment["item_key"],
+                    request_local_text=request_local_text,
+                    open_local_file=open_local_file,
+                )
+                size, sha256 = _read_pdf_stream(local_stream, temporary)
+                source = "local"
+            except Exception:
+                temporary.seek(0)
+                temporary.truncate()
+                local_stream = None
+        if local_stream is None:
+            size, sha256 = _read_pdf_stream(request_file(file_url, api_key), temporary)
+        outcome = _store_prepared_pdf(
+            canonical, uploader, attachment["filename"], temporary, size, sha256, store_file
+        )
+    attachment["_pdf_source"] = source
+    return outcome
+
+
+def _import_browser_pdf(canonical, uploader, uploaded_file, store_file=None):
+    filename = str(uploaded_file.name).replace("\\", "/").rsplit("/", 1)[-1][:500]
+    if not filename.lower().endswith(".pdf"):
+        raise ZoteroImportError("浏览器文件必须是 PDF。")
+    if canonical.uploads.filter(status=UploadedDocument.Status.UPLOADED).exists():
+        already_uploaded = canonical.uploaders.filter(pk=uploader.pk).exists()
+        canonical.uploaders.add(uploader)
+        return "skipped" if already_uploaded else "reused"
+    with tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024) as temporary:
+        size, sha256 = _read_pdf_stream(uploaded_file, temporary)
+        return _store_prepared_pdf(
+            canonical, uploader, filename, temporary, size, sha256, store_file or store_literature
+        )
+
+
+def _store_prepared_pdf(canonical, uploader, filename, temporary, size, sha256, store_file):
+    if canonical.uploads.filter(sha256=sha256).exists():
+        return "reused"
+    temporary.seek(0)
+    uploaded_file = File(temporary, name=filename)
+    uploaded_file.content_type = "application/pdf"
+    stored = store_file(uploaded_file)
+    try:
+        with transaction.atomic():
+            duplicate_type = (
+                UploadedDocument.DuplicateType.EXACT
+                if UploadedDocument.objects.filter(sha256=sha256).exists()
+                else UploadedDocument.DuplicateType.NEW
+            )
+            UploadedDocument.objects.create(
+                canonical_document=canonical,
+                uploader=uploader,
+                original_name=filename,
+                remote_path=stored.remote_path,
+                storage_backend=stored.backend,
+                sha256=sha256,
+                size=size,
+                content_type="application/pdf",
+                duplicate_type=duplicate_type,
+            )
+    except Exception:
+        try:
+            get_literature_storage(stored.backend).delete(stored.remote_path)
+        except Exception:
+            pass
+        raise
+    return "imported"
+
+
+def _read_pdf_stream(stream, temporary):
+    digest = hashlib.sha256()
+    size = 0
+    with stream:
+        while chunk := stream.read(64 * 1024):
             temporary.write(chunk)
             digest.update(chunk)
             size += len(chunk)
-        temporary.seek(0)
-        if b"%PDF-" not in temporary.read(1024):
-            raise ZoteroImportError("下载内容不是有效 PDF。")
-        sha256 = digest.hexdigest()
-        if canonical.uploads.filter(sha256=sha256).exists():
-            return "reused"
+    temporary.seek(0)
+    if b"%PDF-" not in temporary.read(1024):
+        raise ZoteroImportError("文件内容不是有效 PDF。")
+    temporary.seek(0)
+    return size, digest.hexdigest()
 
-        temporary.seek(0)
-        uploaded_file = File(temporary, name=attachment["filename"])
-        uploaded_file.content_type = "application/pdf"
-        stored = store_file(uploaded_file)
-        try:
-            with transaction.atomic():
-                duplicate_type = (
-                    UploadedDocument.DuplicateType.EXACT
-                    if UploadedDocument.objects.filter(sha256=sha256).exists()
-                    else UploadedDocument.DuplicateType.NEW
-                )
-                UploadedDocument.objects.create(
-                    canonical_document=canonical,
-                    uploader=uploader,
-                    original_name=attachment["filename"],
-                    remote_path=stored.remote_path,
-                    storage_backend=stored.backend,
-                    sha256=sha256,
-                    size=size,
-                    content_type="application/pdf",
-                    duplicate_type=duplicate_type,
-                )
-        except Exception:
-            try:
-                get_literature_storage(stored.backend).delete(stored.remote_path)
-            except Exception:
-                pass
-            raise
-    return "imported"
+
+def _zotero_local_api_available():
+    try:
+        with urlopen(Request("http://127.0.0.1:23119/api/"), timeout=1) as response:
+            return response.status == 200
+    except Exception:
+        return False
+
+
+def _open_local_zotero_file(
+    library_type, library_id, attachment_key, request_local_text=None, open_local_file=None
+):
+    prefix = "/api/users/0" if library_type == "users" else f"/api/groups/{quote(str(library_id), safe='')}"
+    url = f"http://127.0.0.1:23119{prefix}/items/{quote(attachment_key, safe='')}/file/view/url"
+    request_local_text = request_local_text or _request_local_text
+    file_url = request_local_text(url)
+    parts = urlsplit(file_url.strip())
+    if parts.scheme != "file" or parts.netloc or parts.query or parts.fragment:
+        raise ZoteroImportError("Zotero Desktop 未返回安全的本地文件。")
+    path = Path(url2pathname(parts.path))
+    if not path.is_absolute():
+        raise ZoteroImportError("Zotero Desktop 未返回安全的本地文件。")
+    try:
+        return (open_local_file or open)(path, "rb")
+    except OSError as exc:
+        raise ZoteroImportError("Zotero Desktop 中的本地 PDF 无法读取。") from exc
+
+
+def _request_local_text(url):
+    try:
+        with urlopen(Request(url, headers={"Zotero-API-Version": "3"}), timeout=1) as response:
+            return response.read(4096).decode("utf-8")
+    except Exception as exc:
+        raise ZoteroImportError("Zotero Desktop 中没有可读的本地 PDF。") from exc
 
 
 def _record_pdf_failure(result, name, exc, api_key):

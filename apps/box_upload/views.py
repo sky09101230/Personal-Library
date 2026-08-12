@@ -27,10 +27,18 @@ from .metadata import (
 )
 from .metadata_jobs import enqueue_metadata_proposal, enqueue_metadata_proposal_safely
 from .metadata_review import apply_metadata_proposal, can_review_document, proposals_for_user, reject_metadata_proposal
-from .models import CanonicalDocument, MetadataProposal, UploadedDocument
+from .models import CanonicalDocument, MetadataProposal, UploadedDocument, ZoteroConnection
 from .services import LiteratureStorageError
 from .storage import delete_literature, get_literature_storage, open_literature_stream, store_literature
-from .zotero import ZoteroImportError, import_zotero_library, iter_zotero_import_library
+from .zotero import (
+    ZoteroImportError,
+    decrypt_zotero_api_key,
+    encrypt_zotero_api_key,
+    fetch_zotero_collections,
+    fetch_zotero_items,
+    iter_zotero_import_library,
+    summarize_zotero_items,
+)
 
 
 _SINGLE_BYTE_RANGE = re.compile(r"^bytes=(?:\d+-\d*|-\d+)$")
@@ -376,48 +384,99 @@ def zotero_import(request):
             status=403 if request.method == "POST" else 200,
         )
 
-    form = ZoteroImportForm(request.POST or None)
-    wants_progress = request.headers.get("Accept") == "application/x-ndjson"
-    if request.method == "POST" and wants_progress and not form.is_valid():
-        return JsonResponse({"ok": False, "message": "请填写完整且有效的 Zotero 导入参数。"}, status=400)
-    if request.method == "POST" and form.is_valid():
-        if wants_progress:
-            def events():
-                try:
-                    for event in iter_zotero_import_library(
-                        form.cleaned_data["library_type"],
-                        form.cleaned_data["library_id"],
-                        form.cleaned_data["api_key"],
-                        collection_key=form.cleaned_data["collection_key"],
-                        uploader=request.user,
-                    ):
-                        yield json.dumps({"ok": True, **event}, ensure_ascii=False) + "\n"
-                except ZoteroImportError as exc:
-                    yield json.dumps({"ok": False, "done": True, "message": str(exc)}, ensure_ascii=False) + "\n"
+    connection = ZoteroConnection.objects.filter(user=request.user).first()
+    initial = {
+        "library_type": connection.library_type if connection else "users",
+        "library_id": connection.library_id if connection else "",
+    }
+    if request.method == "GET":
+        return render(request, "box_upload/zotero_import.html", {
+            "form": ZoteroImportForm(initial=initial),
+            "upgrade_mode": False,
+            "connected": connection is not None,
+        })
 
-            response = StreamingHttpResponse(events(), content_type="application/x-ndjson; charset=utf-8")
-            response["Cache-Control"] = "no-cache, no-store"
-            response["X-Accel-Buffering"] = "no"
-            return response
+    action = request.POST.get("action", "")
+    if action == "connect":
+        form = ZoteroImportForm(request.POST)
+        if not form.is_valid():
+            return JsonResponse({"ok": False, "message": "请填写有效的 Zotero 连接参数。"}, status=400)
+        api_key = form.cleaned_data["api_key"].strip()
+        if not api_key and connection:
+            try:
+                api_key = decrypt_zotero_api_key(connection.api_key_ciphertext)
+            except ZoteroImportError as exc:
+                return JsonResponse({"ok": False, "message": str(exc)}, status=400)
+        if not api_key:
+            return JsonResponse({"ok": False, "message": "首次连接必须填写 Zotero API Key。"}, status=400)
         try:
-            result = import_zotero_library(
-                form.cleaned_data["library_type"],
-                form.cleaned_data["library_id"],
-                form.cleaned_data["api_key"],
-                collection_key=form.cleaned_data["collection_key"],
-                uploader=request.user,
+            collections = fetch_zotero_collections(
+                form.cleaned_data["library_type"], form.cleaned_data["library_id"], api_key
             )
         except ZoteroImportError as exc:
-            form.add_error(None, str(exc))
-        else:
-            messages.success(
-                request,
-                f"Zotero 导入完成：文献新增 {result['created']}，复用 {result['reused']}，"
-                f"跳过 {result['skipped']}；PDF 导入 {result['pdf_imported']}，复用 {result['pdf_reused']}，"
-                f"跳过 {result['pdf_skipped']}，失败 {result['pdf_failed']}。",
+            return JsonResponse({"ok": False, "message": str(exc)}, status=400)
+        connection, _created = ZoteroConnection.objects.update_or_create(
+            user=request.user,
+            defaults={
+                "library_type": form.cleaned_data["library_type"],
+                "library_id": form.cleaned_data["library_id"],
+                "api_key_ciphertext": encrypt_zotero_api_key(api_key),
+            },
+        )
+        return JsonResponse({"ok": True, "collections": collections})
+
+    if not connection:
+        return JsonResponse({"ok": False, "message": "请先连接 Zotero。"}, status=400)
+    try:
+        api_key = decrypt_zotero_api_key(connection.api_key_ciphertext)
+    except ZoteroImportError as exc:
+        return JsonResponse({"ok": False, "message": str(exc)}, status=400)
+
+    if action == "items":
+        collection_key = request.POST.get("collection_key", "").strip()
+        if not collection_key:
+            return JsonResponse({"ok": False, "message": "请选择 Collection。"}, status=400)
+        try:
+            items = fetch_zotero_items(
+                connection.library_type,
+                connection.library_id,
+                api_key,
+                collection_key=collection_key,
             )
-            return redirect("library")
-    return render(request, "box_upload/zotero_import.html", {"form": form, "upgrade_mode": False})
+        except ZoteroImportError as exc:
+            return JsonResponse({"ok": False, "message": str(exc)}, status=400)
+        return JsonResponse({"ok": True, "items": summarize_zotero_items(items)})
+
+    if action != "import":
+        return JsonResponse({"ok": False, "message": "无效的 Zotero 操作。"}, status=400)
+    item_keys = request.POST.getlist("item_keys")
+    if not item_keys:
+        return JsonResponse({"ok": False, "message": "请至少选择一条文献。"}, status=400)
+    selected_keys = {str(key).strip().upper() for key in item_keys}
+    browser_pdfs = {
+        key: request.FILES[f"pdf_{key}"]
+        for key in selected_keys
+        if f"pdf_{key}" in request.FILES
+    }
+
+    def events():
+        try:
+            for event in iter_zotero_import_library(
+                connection.library_type,
+                connection.library_id,
+                api_key,
+                item_keys=item_keys,
+                browser_pdfs=browser_pdfs,
+                uploader=request.user,
+            ):
+                yield json.dumps({"ok": True, **event}, ensure_ascii=False) + "\n"
+        except ZoteroImportError as exc:
+            yield json.dumps({"ok": False, "done": True, "message": str(exc)}, ensure_ascii=False) + "\n"
+
+    response = StreamingHttpResponse(events(), content_type="application/x-ndjson; charset=utf-8")
+    response["Cache-Control"] = "no-cache, no-store"
+    response["X-Accel-Buffering"] = "no"
+    return response
 
 
 @login_required

@@ -29,8 +29,12 @@ class ZoteroImportForm(forms.Form):
 
     library_type = forms.ChoiceField(label="文献库类型", choices=LIBRARY_TYPES)
     library_id = forms.CharField(label="Zotero Library ID", max_length=255)
-    collection_key = forms.CharField(label="Collection Key（可选）", required=False, max_length=255)
-    api_key = forms.CharField(label="Zotero API Key", widget=forms.PasswordInput)
+    api_key = forms.CharField(
+        label="Zotero API Key",
+        required=False,
+        widget=forms.PasswordInput(attrs={"autocomplete": "new-password"}),
+        help_text="已连接时留空可继续使用保存的 Key。",
+    )
 
 
 class MetadataReviewForm(forms.Form):
