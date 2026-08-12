@@ -1,23 +1,27 @@
-# Django and NJU Box API preparation
+# Django 与文献对象存储准备
 
-## Runtime
+## 运行环境
 
-- Python 3.12
-- Django 5.1.7
-- No HTTP client dependency is required; upload uses Python standard-library HTTPS support.
+- Python 3.14
+- Django 5.2.17
+- NAS WebDAV 与历史 NJU Box 适配器均使用 Python 标准库发送 HTTPS 请求，不需要额外 HTTP 客户端依赖。
 
-## Local configuration
+## 本机配置
 
-Copy `.env.example` to `.env` and set the following local-only values:
+复制 `.env.example` 为 `.env`。本地开发可选择 SQLite；当前部署使用 PostgreSQL：
 
 ```dotenv
 DJANGO_SECRET_KEY=replace-for-local-use
 DJANGO_DEBUG=true
-NJU_BOX_API_URL=https://box.nju.edu.cn
-NJU_BOX_REPOSITORY_ID=e2304051-022d-43bd-b3f9-d4d34051a040
-NJU_BOX_TARGET_DIRECTORY=/
-NJU_BOX_API_TOKEN=your-personal-api-token
-NJU_BOX_LIBRARY_PASSWORD=your-library-password
+AGENTSYS_DB_ENGINE=sqlite
+
+LITERATURE_STORAGE_BACKEND=nas_webdav
+NAS_WEBDAV_BASE_URL=https://nas.example.edu:5006
+NAS_WEBDAV_USERNAME=
+NAS_WEBDAV_PASSWORD=
+NAS_WEBDAV_LITERATURE_ROOT=/public/PLAB_KnowledgeBase/Literature
 ```
 
-The app prefers `NJU_BOX_API_TOKEN` and `NJU_BOX_LIBRARY_PASSWORD` from `.env`. If either value is empty, the upload form supplies the missing value for that request. Neither value is stored in the database or session.
+新文件默认写入 NAS WebDAV。每条上传记录保存自己的 `storage_backend`，读取和删除时按记录选择 NAS 或历史 NJU Box，不能根据当前默认值猜测旧文件的位置。只有仍需读取历史 NJU Box 记录时，才保留对应的 NJU Box 配置。
+
+`.env` 只保存在服务器本机，不进入 Git 或同步目录；真实密钥和密码不得写入文档、日志或命令历史。

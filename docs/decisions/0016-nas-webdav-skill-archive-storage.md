@@ -2,13 +2,13 @@
 
 ## 决策
 
-Skill 的 SQLite 元数据继续保留在应用数据库；ZIP 发布包迁移到 NAS 的 `/public/PLAB_KnowledgeBase/Skills`，与 `Literature` 同级。`SharedSkillRelease.storage_backend` 记录每个 ZIP 的实际后端，新同步默认写入 `nas_webdav`，旧记录初始标记为 `nju_box`。
+Skill 元数据继续保留在 PostgreSQL 业务数据库；ZIP 发布包迁移到 NAS 的 `/public/PLAB_KnowledgeBase/Skills`，与 `Literature` 同级。`SharedSkillRelease.storage_backend` 记录每个 ZIP 的实际后端，新发布默认写入 `nas_webdav`，旧记录初始标记为 `nju_box`。
 
 网页和 MCP 下载均由 PLAB 服务端代理。MCP 返回短时签名链接，NAS 用户名和密码不会出现在客户端响应中。
 
 ## 理由
 
-后端属于单条发布记录，迁移期间必须允许 NAS 与 NJU Box 共存。逐条路由可避免一次全局切换让未迁移 ZIP 失效，也无需迁移 SQLite 数据库。
+后端属于单条发布记录，迁移期间必须允许 NAS 与 NJU Box 共存。逐条路由可避免一次全局切换让未迁移 ZIP 失效；对象存储迁移不改变 PostgreSQL 中的业务记录。
 
 ## 迁移约束
 

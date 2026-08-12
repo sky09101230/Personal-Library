@@ -2,11 +2,11 @@
 
 ## 运行依赖
 
-- Python 3.12
-- Django 5.1.7
+- Python 3.14
+- Django 5.2.17
 - `pypdf==6.1.3`：读取 PDF 嵌入 metadata 和前两页文本
 - Crossref REST API：仅在 PDF 中提取到 DOI 后查询精确 work
-- Zotero Web API v3：按个人或群组 library 单向导入 top-level items
+- Zotero Web API v3：连接个人或群组 library，浏览 Collection 并选择 top-level items 导入
 
 安装依赖并执行迁移：
 
@@ -26,15 +26,16 @@ ZOTERO_API_URL=https://api.zotero.org
 METADATA_HTTP_TIMEOUT=5
 ```
 
-`CROSSREF_MAILTO` 用于形成可识别的 API User-Agent。Zotero API Key 不写入 `.env`，由用户在导入页输入并仅用于该次请求。
+`CROSSREF_MAILTO` 用于形成可识别的 API User-Agent。Zotero API Key 不写入 `.env`；管理员首次连接时输入，系统加密保存且不在页面回显。
 
 ## 发布与复核
 
-新上传或新导入的文献默认不发布。管理员在 Django 后台检查 title、authors、DOI、证据与冲突候选后，手工将 `index_status` 改为 `published`。只有此状态的文献可被 MCP Agent 工具读取。
+PDF 成功写入对象存储后，规范文献记录立即发布；只有 Zotero metadata、尚无 PDF 的记录继续保持待处理。管理员仍可复核 title、authors、DOI、证据与冲突候选。MCP Agent 只读取 `index_status=published` 的文献。
 
 ## 当前边界
 
-- pypdf 不能可靠处理扫描 PDF；扫描件会保持待处理状态。
+- pypdf 不能可靠提取扫描 PDF 的文字；这类文件的 metadata 会保持待补全或待复核，但不改变已成功保存 PDF 的发布状态。
 - 无 DOI 文献不会执行标题模糊匹配，避免错误自动绑定。
-- Zotero 首版不下载 PDF 附件、不保存 Collection 层级、不做增量或双向同步。
-- Crossref 或 Zotero 网络失败需要用户稍后重试；PDF 上传本身不因 Crossref 失败而失败。
+- Zotero 只导入明确选择的浏览器 PDF，或 Zotero 中 `imported_file + application/pdf` 的托管附件；跳过网页快照、URL 附件和 linked file，不做双向同步。
+- 浏览器 PDF 优先；未选择时，服务器上的 Zotero Desktop 可读文件优先于 Zotero Web 下载。单个 PDF 失败时保留 metadata 并继续处理其他条目。
+- 网页上传从 PDF 提取到 DOI 时，DOI/BibTeX 预检失败会在写入对象存储前停止整批；后续 metadata 补全失败不会删除已成功保存的 PDF。
