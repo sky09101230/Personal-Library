@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -62,7 +64,25 @@ TEMPLATES = [{
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
-DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
+database_engine = os.environ.get("AGENTSYS_DB_ENGINE", "sqlite").strip().lower()
+if database_engine == "sqlite":
+    DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
+elif database_engine == "postgresql":
+    postgres_settings = {
+        "NAME": os.environ.get("AGENTSYS_DB_NAME", "").strip(),
+        "USER": os.environ.get("AGENTSYS_DB_USER", "").strip(),
+        "PASSWORD": os.environ.get("AGENTSYS_DB_PASSWORD", ""),
+        "HOST": os.environ.get("AGENTSYS_DB_HOST", "").strip(),
+        "PORT": os.environ.get("AGENTSYS_DB_PORT", "").strip(),
+    }
+    missing_settings = [name for name, value in postgres_settings.items() if not value]
+    if missing_settings:
+        raise ImproperlyConfigured(
+            "PostgreSQL requires these AgentSys database settings: " + ", ".join(missing_settings)
+        )
+    DATABASES = {"default": {"ENGINE": "django.db.backends.postgresql", **postgres_settings}}
+else:
+    raise ImproperlyConfigured(f"Unsupported AGENTSYS_DB_ENGINE: {database_engine}")
 LANGUAGE_CODE = "zh-hans"
 TIME_ZONE = "Asia/Shanghai"
 USE_I18N = True
