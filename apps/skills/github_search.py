@@ -66,7 +66,7 @@ def search_github_skills(keyword, page=1):
         return cached
 
     payload = _request_json("/search/code", {
-        "q": f"{keyword} in:file filename:SKILL.md is:public",
+        "q": f"{keyword} in:file filename:SKILL.md",
         "per_page": SEARCH_PAGE_SIZE,
         "page": page,
     })

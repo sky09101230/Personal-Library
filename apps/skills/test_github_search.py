@@ -55,7 +55,7 @@ class GitHubSearchTests(TestCase):
         self.assertEqual(urlopen.call_count, 1)
         request = urlopen.call_args.args[0]
         query = parse_qs(urlsplit(request.full_url).query)
-        self.assertEqual(query["q"], ["paper review in:file filename:SKILL.md is:public"])
+        self.assertEqual(query["q"], ["paper review in:file filename:SKILL.md"])
         self.assertEqual(query["per_page"], ["20"])
         self.assertEqual(request.get_header("Authorization"), "Bearer server-only-token")
 
