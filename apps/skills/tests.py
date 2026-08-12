@@ -456,7 +456,8 @@ class SkillSyncJobViewTests(TestCase):
         response = self.client.get("/skills/")
 
         self.assertContains(response, "重新生成正式 Skill 摘要")
-        self.assertContains(response, 'submitter.getAttribute("formaction") || form.action')
+        self.assertContains(response, 'action="/skills/sync/"')
+        self.assertNotContains(response, "await fetch(submitter")
 
     def test_staff_can_edit_generated_description(self):
         source = GitHubSkillSource.objects.create(
@@ -506,6 +507,13 @@ class SkillSyncJobViewTests(TestCase):
             "operation": SkillSyncJob.SCAN,
         })
         launch_scan_job.assert_called_once_with(job.pk, source_id=None)
+
+    @patch("apps.skills.views.launch_scan_job")
+    def test_sync_native_form_redirects_to_progress_page(self, launch_scan_job):
+        response = self.client.post("/skills/sync/")
+
+        self.assertRedirects(response, "/skills/")
+        launch_scan_job.assert_called_once()
 
     @patch("apps.skills.views.launch_enrichment_job")
     def test_enrichment_starts_independent_background_job(self, launch_job):

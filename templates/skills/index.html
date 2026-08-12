@@ -16,7 +16,6 @@
   const sourceSelect = document.getElementById("skills-sync-source");
   const progress = document.getElementById("sync-progress");
   if (!form || !progress) return;
-  const csrfToken = form.querySelector("[name=csrfmiddlewaretoken]").value;
   let jobId = progress.dataset.jobId || "";
   let timer = null;
   const statusUrl = (id) => progress.dataset.statusUrlTemplate.replace("0", id);
@@ -51,32 +50,14 @@
     }
   };
   const startPolling = () => { poll().catch(() => setText("sync-progress-detail", "暂时无法读取任务状态，请刷新页面重试。")); timer = setInterval(() => poll().catch(() => {}), 1000); };
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
+  form.addEventListener("submit", (event) => {
     const sourceName = sourceSelect.options[sourceSelect.selectedIndex].textContent;
     const submitter = event.submitter || button;
     const isEnrichment = submitter === enrichButton;
     const confirmation = isEnrichment
       ? `将把“${sourceName}”的 SKILL.md 发送给 DeepSeek，并且只更新数据库中的摘要和分类，不访问文件存储。继续吗？`
       : `将扫描“${sourceName}”并更新私有候选池，不会直接发布。继续吗？`;
-    if (!confirm(confirmation)) return;
-    const body = new FormData(form);
-    buttons.forEach((item) => { item.disabled = true; });
-    sourceSelect.disabled = true;
-    progress.hidden = false;
-    setText("sync-progress-title", isEnrichment ? "正在启动正式 Skill 摘要" : "正在启动候选扫描");
-    setText("sync-progress-detail", "任务已提交，等待后台进程开始...");
-    const response = await fetch(submitter.getAttribute("formaction") || form.action, {method: "POST", headers: {"Accept": "application/json", "X-CSRFToken": csrfToken}, body});
-    const data = await response.json();
-    if (!response.ok) {
-      buttons.forEach((item) => { item.disabled = false; });
-      sourceSelect.disabled = false;
-      setText("sync-progress-title", "任务未启动");
-      setText("sync-progress-detail", data.error || "无法启动任务。");
-      return;
-    }
-    jobId = String(data.job_id);
-    startPolling();
+    if (!confirm(confirmation)) event.preventDefault();
   });
   if (jobId) {
     buttons.forEach((item) => { item.disabled = true; });
