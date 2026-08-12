@@ -13,7 +13,8 @@ from apps.box_upload.storage import NAS_WEBDAV
 
 from .downloads import load_skill_download_token
 from .candidate_services import CandidatePublishError, CandidateValidationError, create_uploaded_candidate, publish_candidate, reject_candidate
-from .forms import SkillCandidateReviewForm, SkillCandidateUploadForm, SkillDescriptionForm
+from .forms import GitHubSkillSearchForm, SkillCandidateReviewForm, SkillCandidateUploadForm, SkillDescriptionForm
+from .github_search import GitHubSearchError, search_github_skills
 from .models import FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillCandidate, SkillPurpose
 from .services import get_or_create_skill_job, mark_job_failed
 from .storage import open_skill_stream
@@ -83,6 +84,28 @@ def index(request):
 def featured(request):
     entries = FeaturedSkill.objects.select_related("skill", "skill__purpose", "skill__source").prefetch_related("skill__releases")
     return render(request, "skills/featured.html", {"entries": entries})
+
+
+@login_required
+@user_passes_test(lambda user: user.is_staff)
+@require_GET
+def discover_github(request):
+    form = GitHubSkillSearchForm(request.GET or None)
+    search_result = None
+    search_error = ""
+    if request.GET and form.is_valid():
+        page = request.GET.get("page", "1")
+        page = int(page) if page.isdecimal() else 1
+        try:
+            search_result = search_github_skills(form.cleaned_data["q"], page=page)
+        except GitHubSearchError as exc:
+            search_error = str(exc)
+    return render(request, "skills/discover_github.html", {
+        "form": form,
+        "query": form.data.get("q", "") if form.is_bound else "",
+        "search_result": search_result,
+        "search_error": search_error,
+    })
 
 
 @login_required

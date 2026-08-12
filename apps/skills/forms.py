@@ -3,6 +3,21 @@ from django import forms
 from .models import SkillPurpose
 
 
+class GitHubSkillSearchForm(forms.Form):
+    q = forms.CharField(
+        label="关键词",
+        min_length=2,
+        max_length=80,
+        strip=True,
+        error_messages={
+            "required": "请输入关键词。",
+            "min_length": "关键词至少需要 2 个字符。",
+            "max_length": "关键词最多 80 个字符。",
+        },
+        widget=forms.SearchInput(attrs={"placeholder": "例如 literature review"}),
+    )
+
+
 class SkillDescriptionForm(forms.Form):
     description = forms.CharField(
         label="展示描述",

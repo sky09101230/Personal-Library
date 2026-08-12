@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}搜索 GitHub Skill | PLAB{% endblock %}
+{% block content %}
+<div class="page-head"><p class="eyebrow">管理员工具</p><h1>搜索 GitHub Skill</h1><p class="subtle">按关键词查找公开仓库中的 <code>SKILL.md</code>。GitHub 的索引可能不完整。</p></div>
+<nav class="skills-subnav" aria-label="Skills 导航"><a href="{% url 'skills-index' %}">全部 Skills</a><a href="{% url 'skills-candidates' %}">候选审核</a><a class="active" href="{% url 'skills-discover-github' %}">GitHub 搜索</a></nav>
+<div class="panel">
+  <form method="get" class="library-search" role="search">
+    {{ form.q.label_tag }}
+    <div class="library-search-controls">{{ form.q }}<button class="primary" type="submit">搜索 SKILL.md</button></div>
+    {{ form.q.errors }}
+    <p class="help">必须输入 2 至 80 个字符；系统不提供“搜索全部”。</p>
+  </form>
+</div>
+{% if search_error %}<div class="notice error">{{ search_error }}</div>{% endif %}
+{% if search_result %}
+  <p class="subtle">GitHub 报告约 {{ search_result.total_count }} 个匹配，本页显示 {{ search_result.items|length }} 个。{% if search_result.incomplete_results %}本次结果不完整，请稍后重试或缩小关键词。{% endif %}</p>
+  <div class="table-wrap"><table><thead><tr><th>仓库</th><th>SKILL.md 路径</th><th>操作</th></tr></thead><tbody>
+  {% for item in search_result.items %}<tr><td><a href="{{ item.repository_url }}" target="_blank" rel="noopener noreferrer">{{ item.full_name }}</a></td><td><code>{{ item.path }}</code></td><td><a href="{{ item.html_url }}" target="_blank" rel="noopener noreferrer">在 GitHub 查看</a></td></tr>{% empty %}<tr><td colspan="3" class="subtle">没有匹配结果，请换一个更具体的关键词。</td></tr>{% endfor %}
+  </tbody></table></div>
+  {% if search_result.pages > 1 %}<nav class="pager"><span>第 {{ search_result.page }} / {{ search_result.pages }} 页</span><span class="pager-nav">{% if search_result.page > 1 %}<a href="?q={{ query|urlencode }}&page={{ search_result.page|add:'-1' }}">上一页</a>{% endif %}{% if search_result.page < search_result.pages %}<a href="?q={{ query|urlencode }}&page={{ search_result.page|add:'1' }}">下一页</a>{% endif %}</span></nav>{% endif %}
+{% endif %}
+{% endblock %}
