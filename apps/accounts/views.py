@@ -1,9 +1,16 @@
 from django.contrib.auth import login
 from django.contrib.auth.forms import AuthenticationForm
+from django.db import transaction
 from django.shortcuts import redirect, render
+from django.utils import timezone
 from django.utils.http import url_has_allowed_host_and_scheme
 
-from .forms import RegistrationForm
+from .forms import INVALID_INVITATION_MESSAGE, RegistrationForm
+from .models import RegistrationInvitation
+
+
+class _InvitationUnavailable(Exception):
+    pass
 
 
 def register(request):
@@ -11,9 +18,23 @@ def register(request):
         return redirect("home")
     form = RegistrationForm(request.POST or None)
     if request.method == "POST" and form.is_valid():
-        user = form.save()
-        login(request, user)
-        return redirect("home")
+        try:
+            with transaction.atomic():
+                user = form.save()
+                updated = RegistrationInvitation.available_for(
+                    form.cleaned_data["invitation_code"]
+                ).update(
+                    is_active=False,
+                    used_at=timezone.now(),
+                    used_by=user,
+                )
+                if updated != 1:
+                    raise _InvitationUnavailable
+        except _InvitationUnavailable:
+            form.add_error("invitation_code", INVALID_INVITATION_MESSAGE)
+        else:
+            login(request, user)
+            return redirect("home")
     return render(request, "accounts/register.html", {"form": form})
 
 

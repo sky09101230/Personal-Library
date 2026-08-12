@@ -1,3 +1,3 @@
 {% extends "base.html" %}
 {% block title %}Create account | PLAB{% endblock %}
-{% block content %}<div class="auth-card panel"><p class="eyebrow">PLAB workspace</p><h1>Create account</h1><p class="subtle">创建课题组上传账户。</p><form method="post">{% csrf_token %}{{ form.as_p }}<button class="primary" type="submit">Create account</button></form><p class="subtle">已有账户？<a href="{% url 'login' %}">返回登录</a></p></div>{% endblock %}
+{% block content %}<div class="auth-card panel"><p class="eyebrow">PLAB workspace</p><h1>Create account</h1><p class="subtle">使用管理员提供的一次性邀请码创建课题组账户。</p><form method="post">{% csrf_token %}{{ form.as_p }}<button class="primary" type="submit">Create account</button></form><p class="subtle">已有账户？<a href="{% url 'login' %}">返回登录</a></p></div>{% endblock %}
