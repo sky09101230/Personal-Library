@@ -12,7 +12,7 @@
   <a href="{% url 'skills-submit-candidate' %}">投稿 ZIP</a>
 </div>
 <form method="post" action="{% url 'skills-candidates-batch-publish' %}">{% csrf_token %}
-<div class="table-wrap"><table><thead><tr>{% if request.user.is_staff %}<th>选择</th>{% endif %}<th>Skill</th><th>来源</th><th>分类</th><th>状态</th><th>更新时间</th><th></th></tr></thead><tbody>
+<div class="table-wrap"><table><thead><tr>{% if request.user.is_staff %}<th><label><input id="candidate-select-all" type="checkbox"> 全选当前页</label></th>{% endif %}<th>Skill</th><th>来源</th><th>分类</th><th>状态</th><th>更新时间</th><th></th></tr></thead><tbody>
 {% for candidate in page.object_list %}<tr>
   {% if request.user.is_staff %}<td>{% if candidate.status == 'pending' and candidate.purpose_id and candidate.description and not candidate.validation_errors %}<input type="checkbox" name="candidate_ids" value="{{ candidate.pk }}" aria-label="选择 {{ candidate.name }}">{% else %}—{% endif %}</td>{% endif %}
   <td><strong>{{ candidate.name }}</strong><div class="file-meta">{{ candidate.description|truncatechars:120|default:"等待摘要" }}</div></td>
@@ -26,4 +26,19 @@
 {% if request.user.is_staff %}<p><button class="primary" type="submit">发布选中候选</button></p>{% endif %}
 </form>
 {% if page.has_other_pages %}<nav class="pager"><span>第 {{ page.number }} / {{ page.paginator.num_pages }} 页</span><span class="pager-nav">{% if page.has_previous %}<a href="?page={{ page.previous_page_number }}">上一页</a>{% endif %}{% if page.has_next %}<a href="?page={{ page.next_page_number }}">下一页</a>{% endif %}</span></nav>{% endif %}
+{% if request.user.is_staff %}<script>
+(() => {
+  const selectAll = document.getElementById("candidate-select-all");
+  const candidates = [...document.querySelectorAll('input[name="candidate_ids"]')];
+  if (!selectAll) return;
+  const update = () => {
+    selectAll.checked = candidates.length > 0 && candidates.every((item) => item.checked);
+    selectAll.indeterminate = candidates.some((item) => item.checked) && !selectAll.checked;
+  };
+  selectAll.disabled = candidates.length === 0;
+  selectAll.addEventListener("change", () => candidates.forEach((item) => { item.checked = selectAll.checked; }));
+  candidates.forEach((item) => item.addEventListener("change", update));
+  update();
+})();
+</script>{% endif %}
 {% endblock %}

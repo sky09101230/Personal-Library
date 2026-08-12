@@ -318,3 +318,12 @@ class CandidateViewTests(TestCase):
 
         self.assertRedirects(response, "/skills/candidates/")
         publish.assert_called_once_with(self.own, self.admin)
+
+    def test_staff_candidate_list_can_select_all_publishable_rows(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.get("/skills/candidates/")
+
+        self.assertContains(response, "全选当前页")
+        self.assertContains(response, 'value="%s"' % self.own.pk)
+        self.assertContains(response, 'querySelectorAll(\'input[name="candidate_ids"]\')')
