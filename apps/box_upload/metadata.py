@@ -1,5 +1,6 @@
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from html import unescape
 from urllib.parse import quote, urlsplit
@@ -24,6 +25,7 @@ PDF_PAGE_TEXT_LIMIT = 6000
 BIBTEX_RESPONSE_LIMIT = 100_000
 BIBTEX_EVIDENCE_LIMIT = 50_000
 DOI_CANDIDATE_LIMIT = 20
+DOI_TITLE_MATCH_THRESHOLD = 0.70
 
 
 class MetadataResolutionError(Exception):
@@ -151,6 +153,58 @@ def fetch_crossref_work(doi):
     return message
 
 
+def select_pdf_doi(evidence, bibtex_fetcher=None):
+    candidates = evidence.get("doi_candidates") or []
+    if len(candidates) < 2 or not evidence.get("title"):
+        doi = normalize_doi(evidence.get("doi"))
+        if not doi:
+            return "", ""
+        return doi, (bibtex_fetcher or fetch_doi_bibtex)(doi)
+
+    fetcher = bibtex_fetcher or fetch_doi_bibtex
+
+    def resolve_candidate(candidate):
+        doi = normalize_doi(candidate.get("doi"))
+        if not doi:
+            return None
+        try:
+            raw_bibtex = fetcher(doi)
+            _, metadata = parse_bibtex_metadata(raw_bibtex, expected_doi=doi)
+            if normalize_doi(metadata["doi"]) != doi:
+                return None
+        except MetadataResolutionError:
+            return None
+        return {
+            "doi": doi,
+            "raw_bibtex": raw_bibtex,
+            "title": metadata["title"],
+            "title_similarity": _title_similarity(evidence["title"], metadata["title"]),
+            "source": candidate.get("source"),
+            "page": candidate.get("page"),
+        }
+
+    with ThreadPoolExecutor(max_workers=min(8, len(candidates))) as executor:
+        matches = [match for match in executor.map(resolve_candidate, candidates) if match]
+
+    if not matches:
+        raise MetadataResolutionError("No PDF DOI candidate returned matching BibTeX metadata.")
+    selected = max(matches, key=lambda candidate: candidate["title_similarity"])
+    evidence["doi_selection"] = {
+        "method": "bibtex_title_similarity",
+        "threshold": DOI_TITLE_MATCH_THRESHOLD,
+        "candidates": [{
+            "doi": candidate["doi"],
+            "title": candidate["title"],
+            "title_similarity": round(candidate["title_similarity"], 6),
+        } for candidate in matches],
+    }
+    if selected["title_similarity"] < DOI_TITLE_MATCH_THRESHOLD:
+        raise MetadataResolutionError("No PDF DOI candidate matches the PDF title.")
+    evidence["doi"] = selected["doi"]
+    evidence["doi_source"] = {"source": selected["source"], "page": selected["page"]}
+    return selected["doi"], selected["raw_bibtex"]
+
+
 def resolve_pdf_metadata(canonical, uploaded_file, crossref_fetcher=None, bibtex_fetcher=None):
     if canonical.metadata_status not in {
         CanonicalDocument.MetadataStatus.PENDING,
@@ -166,7 +220,21 @@ def resolve_pdf_metadata(canonical, uploaded_file, crossref_fetcher=None, bibtex
     if not canonical.authors and evidence["authors"]:
         canonical.authors = [{"name": name} for name in evidence["authors"]]
 
-    doi = evidence["doi"]
+    provider_errors = {}
+    raw_bibtex = ""
+    candidate_dois = [normalize_doi(candidate.get("doi")) for candidate in evidence["doi_candidates"]]
+    doi = normalize_doi(canonical.doi) if normalize_doi(canonical.doi) in candidate_dois else ""
+    if not doi and len(candidate_dois) > 1:
+        try:
+            doi, raw_bibtex = select_pdf_doi(evidence, bibtex_fetcher=bibtex_fetcher)
+        except MetadataResolutionError as exc:
+            return _save_conflict(
+                canonical,
+                "doi",
+                [{"value": candidate["doi"], "source": candidate["source"]} for candidate in evidence["doi_candidates"]],
+                provider_errors={"bibtex": str(exc)},
+            )
+    doi = doi or evidence["doi"]
     if not doi:
         canonical.metadata_status = CanonicalDocument.MetadataStatus.INCOMPLETE
         canonical.save()
@@ -177,12 +245,10 @@ def resolve_pdf_metadata(canonical, uploaded_file, crossref_fetcher=None, bibtex
     canonical.metadata_status = CanonicalDocument.MetadataStatus.NEEDS_REVIEW
     canonical.metadata_confidence = 0.600
 
-    provider_errors = {}
-    raw_bibtex = ""
     bibtex_entry = None
     bibtex_metadata = None
     try:
-        raw_bibtex = (bibtex_fetcher or fetch_doi_bibtex)(doi)
+        raw_bibtex = raw_bibtex or (bibtex_fetcher or fetch_doi_bibtex)(doi)
         bibtex_entry, bibtex_metadata = parse_bibtex_metadata(raw_bibtex, expected_doi=doi)
     except MetadataResolutionError as exc:
         provider_errors["bibtex"] = str(exc)
@@ -229,7 +295,11 @@ def resolve_pdf_metadata(canonical, uploaded_file, crossref_fetcher=None, bibtex
         canonical.save()
         return canonical
 
-    if evidence["title"] and resolved["title"] and _title_similarity(evidence["title"], resolved["title"]) < 0.45:
+    if (
+        evidence["title"]
+        and resolved["title"]
+        and _title_similarity(evidence["title"], resolved["title"]) < DOI_TITLE_MATCH_THRESHOLD
+    ):
         return _save_conflict(canonical, "title", [
             {"value": evidence["title"], "source": "pdf"},
             {"value": resolved["title"], "source": "bibtex" if bibtex_metadata else "crossref"},
@@ -332,6 +402,12 @@ def _crossref_metadata(work):
 
 def parse_bibtex_metadata(raw_bibtex, expected_doi=""):
     parser = BibTexParser(common_strings=True)
+    parser.bib_database.strings.update({
+        month.lower(): month for month in (
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December",
+        )
+    })
     parser.bib_database.strings["sept"] = "September"
     parser.customization = _customize_bibtex_record
     try:

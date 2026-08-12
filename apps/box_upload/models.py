@@ -1,5 +1,6 @@
 from django.contrib.auth.models import User
 from django.db import models
+from django.db.models.functions import Lower
 
 
 class CanonicalDocument(models.Model):
@@ -39,8 +40,18 @@ class CanonicalDocument(models.Model):
         choices=IndexStatus.choices,
         default=IndexStatus.PENDING,
     )
+    uploaders = models.ManyToManyField(User, related_name="uploaded_literature", blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                Lower("doi"),
+                condition=~models.Q(doi=""),
+                name="unique_canonical_doi_ci",
+            )
+        ]
 
     def __str__(self):
         return self.title or self.doi or self.sha256 or f"Literature {self.pk}"
@@ -108,6 +119,10 @@ class UploadedDocument(models.Model):
 
     class Meta:
         ordering = ("-uploaded_at",)
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+        self.canonical_document.uploaders.add(self.uploader_id)
 
 
 class MetadataProposal(models.Model):

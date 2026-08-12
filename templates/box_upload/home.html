@@ -13,12 +13,12 @@
   </div>
 </section>
 <section class="library-summary" aria-label="Workspace summary">
-  <div class="library-stat"><strong>{{ record_count }}</strong><span>Upload records</span></div>
-  <div class="library-stat"><strong>{{ canonical_count }}</strong><span>Canonical literature</span></div>
-  <div class="library-stat"><strong>{{ contributor_count }}</strong><span>Contributors</span></div>
+  <div class="library-stat"><strong>{{ record_count }}</strong><span>PDF 附件</span><small>每次上传或导入计一条</small></div>
+  <div class="library-stat"><strong>{{ canonical_count }}</strong><span>去重后文献</span><small>同一篇文献只计一次</small></div>
+  <div class="library-stat"><strong>{{ contributor_count }}</strong><span>贡献者</span></div>
 </section>
 <div class="panel home-recent-panel">
-  <div class="home-section-head"><div><h2>Recent uploads</h2><p class="subtle">最新写入文献库的 PDF 附件记录。</p></div><div><a href="{% url 'zotero-import' %}">Import Zotero</a> · <a class="primary" href="{% url 'box-upload' %}">Upload PDF</a></div></div>
-  <div class="table-wrap"><table><thead><tr><th>Document</th><th>Uploaded by</th><th>Added</th><th></th></tr></thead><tbody>{% for upload in recent_uploads %}<tr><td><div class="file-cell"><span class="file-mark">PDF</span><div><div class="file-name">{{ upload.original_name }}</div><div class="file-meta">{{ upload.remote_path }}</div></div></div></td><td>{{ upload.uploader.username }}</td><td>{{ upload.uploaded_at|date:"Y-m-d H:i" }}</td><td><a class="download-link" href="{% url 'view-document' upload.pk %}" target="_blank" rel="noopener">在线打开</a> · <a class="download-link" href="{% url 'download-document' upload.pk %}">Download</a></td></tr>{% empty %}<tr><td colspan="4">No uploaded literature yet.</td></tr>{% endfor %}</tbody></table></div>
+  <div class="home-section-head"><div><h2>最新文献</h2><p class="subtle">与文献库一致，按去重后的文献展示。</p></div><div><a href="{% url 'zotero-import' %}">从 Zotero 导入</a> · <a class="primary" href="{% url 'box-upload' %}">上传 PDF</a></div></div>
+  {% include "box_upload/_literature_table.html" with literatures=recent_literature show_abstract=False %}
 </div>
 {% endblock %}

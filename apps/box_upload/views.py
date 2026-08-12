@@ -17,7 +17,14 @@ from django.views.decorators.http import require_GET, require_POST
 
 from .downloads import load_literature_download_token
 from .forms import BoxUploadForm, MetadataReviewForm, ZoteroImportForm
-from .metadata import MetadataResolutionError, extract_pdf_evidence, fetch_doi_bibtex, resolve_pdf_metadata_safely
+from .metadata import (
+    MetadataResolutionError,
+    extract_pdf_evidence,
+    fetch_doi_bibtex,
+    normalize_doi,
+    resolve_pdf_metadata_safely,
+    select_pdf_doi,
+)
 from .metadata_jobs import enqueue_metadata_proposal, enqueue_metadata_proposal_safely
 from .metadata_review import apply_metadata_proposal, can_review_document, proposals_for_user, reject_metadata_proposal
 from .models import CanonicalDocument, MetadataProposal, UploadedDocument
@@ -78,11 +85,22 @@ def _preview_document_for_proposal(proposal):
 @login_required
 def home(request):
     records = UploadedDocument.objects.filter(status=UploadedDocument.Status.UPLOADED).select_related("uploader")
+    recent_literature = CanonicalDocument.objects.prefetch_related(
+        Prefetch("uploads", queryset=records),
+        Prefetch(
+            "metadata_proposals",
+            queryset=MetadataProposal.objects.select_related("requested_by", "reviewed_by", "source_upload"),
+        ),
+        "uploaders",
+    ).order_by("-created_at")[:5]
+    for literature in recent_literature:
+        literature.latest_metadata_proposal = next(iter(literature.metadata_proposals.all()), None)
+        literature.can_review_ai_metadata = can_review_document(request.user, literature)
     return render(request, "box_upload/home.html", {
         "record_count": records.count(),
         "canonical_count": CanonicalDocument.objects.count(),
-        "contributor_count": records.values("uploader_id").distinct().count(),
-        "recent_uploads": records[:5],
+        "contributor_count": CanonicalDocument.uploaders.through.objects.values("user_id").distinct().count(),
+        "recent_literature": recent_literature,
     })
 
 
@@ -93,51 +111,105 @@ def upload(request):
         form = BoxUploadForm(request.POST, request.FILES)
         if form.is_valid():
             remote_paths = []
+            merged_count = 0
+            skipped_count = 0
+            duplicate_notices = []
             try:
                 prepared_files = []
                 prefetched_bibtex = {}
                 for uploaded_file in form.cleaned_data["files"]:
                     digest = _sha256(uploaded_file)
-                    if digest not in prefetched_bibtex:
-                        bibtex = None
-                        if not CanonicalDocument.objects.filter(sha256=digest).exists():
-                            evidence = extract_pdf_evidence(uploaded_file)
-                            if evidence["doi"]:
-                                bibtex = fetch_doi_bibtex(evidence["doi"])
-                        prefetched_bibtex[digest] = bibtex
-                    prepared_files.append((uploaded_file, digest))
+                    evidence = extract_pdf_evidence(uploaded_file)
+                    doi = normalize_doi(evidence["doi"])
+                    if len(evidence.get("doi_candidates") or []) > 1:
+                        doi, bibtex = select_pdf_doi(evidence, bibtex_fetcher=fetch_doi_bibtex)
+                        prefetched_bibtex[doi] = bibtex
+                    existing = CanonicalDocument.objects.filter(doi__iexact=doi).first() if doi else None
+                    if doi and existing is None and doi not in prefetched_bibtex:
+                        prefetched_bibtex[doi] = fetch_doi_bibtex(doi)
+                    prepared_files.append((uploaded_file, digest, doi, existing))
 
-                for uploaded_file, digest in prepared_files:
+                for uploaded_file, digest, doi, existing in prepared_files:
+                    if doi:
+                        existing = CanonicalDocument.objects.filter(doi__iexact=doi).first()
+                    if existing and existing.uploads.filter(status=UploadedDocument.Status.UPLOADED).exists():
+                        if existing.uploaders.filter(pk=request.user.pk).exists():
+                            skipped_count += 1
+                            duplicate_notices.append(f"{uploaded_file.name}：你已上传过该文献，已跳过")
+                        else:
+                            existing.uploaders.add(request.user)
+                            merged_count += 1
+                            duplicate_notices.append(
+                                f"{uploaded_file.name}：文献已存在，已加入上传者，未重复保存 PDF"
+                            )
+                        continue
+
                     stored = store_literature(uploaded_file)
-                    remote_paths.append(stored.remote_path)
+                    race_outcome = ""
                     try:
                         with transaction.atomic():
-                            canonical, created = CanonicalDocument.objects.get_or_create(
-                                sha256=digest,
-                                defaults={"index_status": CanonicalDocument.IndexStatus.PUBLISHED},
-                            )
+                            if existing is not None:
+                                canonical, created = existing, False
+                            elif doi:
+                                canonical, created = CanonicalDocument.objects.get_or_create(
+                                    doi=doi,
+                                    defaults={
+                                        "sha256": digest,
+                                        "index_status": CanonicalDocument.IndexStatus.PUBLISHED,
+                                    },
+                                )
+                            else:
+                                canonical, created = CanonicalDocument.objects.get_or_create(
+                                    sha256=digest,
+                                    defaults={"index_status": CanonicalDocument.IndexStatus.PUBLISHED},
+                                )
+                            has_uploaded_pdf = canonical.uploads.filter(
+                                status=UploadedDocument.Status.UPLOADED
+                            ).exists()
+                            if doi and not created and has_uploaded_pdf:
+                                already_uploaded = canonical.uploaders.filter(pk=request.user.pk).exists()
+                                race_outcome = "skipped" if already_uploaded else "merged"
+                                upload_record = None
+                            else:
+                                upload_record = UploadedDocument.objects.create(
+                                    canonical_document=canonical,
+                                    uploader=request.user,
+                                    original_name=uploaded_file.name,
+                                    remote_path=stored.remote_path,
+                                    storage_backend=stored.backend,
+                                    sha256=digest,
+                                    size=uploaded_file.size,
+                                    content_type=uploaded_file.content_type or "",
+                                    duplicate_type=(
+                                        UploadedDocument.DuplicateType.NEW
+                                        if created or not has_uploaded_pdf
+                                        else UploadedDocument.DuplicateType.EXACT
+                                    ),
+                                )
                             if not created and canonical.index_status != CanonicalDocument.IndexStatus.PUBLISHED:
                                 canonical.index_status = CanonicalDocument.IndexStatus.PUBLISHED
                                 canonical.save(update_fields=["index_status", "updated_at"])
-                            upload_record = UploadedDocument.objects.create(
-                                canonical_document=canonical,
-                                uploader=request.user,
-                                original_name=uploaded_file.name,
-                                remote_path=stored.remote_path,
-                                storage_backend=stored.backend,
-                                sha256=digest,
-                                size=uploaded_file.size,
-                                content_type=uploaded_file.content_type or "",
-                                duplicate_type=(UploadedDocument.DuplicateType.NEW if created else UploadedDocument.DuplicateType.EXACT),
-                            )
                     except Exception:
                         try:
                             get_literature_storage(stored.backend).delete(stored.remote_path)
                         except LiteratureStorageError:
                             pass
                         raise
+                    if race_outcome:
+                        get_literature_storage(stored.backend).delete(stored.remote_path)
+                        canonical.uploaders.add(request.user)
+                        if race_outcome == "skipped":
+                            skipped_count += 1
+                            duplicate_notices.append(f"{uploaded_file.name}：你已上传过该文献，已跳过")
+                        else:
+                            merged_count += 1
+                            duplicate_notices.append(
+                                f"{uploaded_file.name}：文献已存在，已加入上传者，未重复保存 PDF"
+                            )
+                        continue
+                    remote_paths.append(stored.remote_path)
                     if created:
-                        bibtex = prefetched_bibtex[digest]
+                        bibtex = prefetched_bibtex.get(doi)
                         resolve_pdf_metadata_safely(
                             canonical,
                             uploaded_file,
@@ -164,9 +236,20 @@ def upload(request):
                     }, status=400)
                 form.add_error(None, message)
             else:
+                notice = "；".join(duplicate_notices)
                 if is_ajax:
-                    return JsonResponse({"ok": True, "count": len(remote_paths), "paths": remote_paths})
-                messages.success(request, f"已完成 {len(remote_paths)} 个文件上传。")
+                    return JsonResponse({
+                        "ok": True,
+                        "count": len(remote_paths),
+                        "merged": merged_count,
+                        "skipped": skipped_count,
+                        "notice": notice,
+                        "paths": remote_paths,
+                    })
+                messages.success(
+                    request,
+                    f"已完成 {len(remote_paths)} 个文件上传。" + (f" {notice}。" if notice else ""),
+                )
                 return redirect("box-upload")
         elif is_ajax:
             file_errors = form.errors.get("files")
@@ -185,8 +268,6 @@ def upload_history(request):
 @login_required
 def library(request, uploader=None):
     uploads = UploadedDocument.objects.select_related("uploader")
-    if uploader is not None:
-        uploads = uploads.filter(uploader=uploader)
     records = CanonicalDocument.objects.prefetch_related(
         Prefetch("uploads", queryset=uploads),
         Prefetch(
@@ -194,9 +275,10 @@ def library(request, uploader=None):
             queryset=MetadataProposal.objects.select_related("requested_by", "reviewed_by", "source_upload"),
         ),
         "external_references",
+        "uploaders",
     ).order_by("-created_at")
     if uploader is not None:
-        records = records.filter(uploads__uploader=uploader).distinct()
+        records = records.filter(uploaders=uploader)
     scoped_records = records
     workflow = request.GET.get("workflow", "").strip()
     if workflow == "review":
@@ -217,7 +299,7 @@ def library(request, uploader=None):
     uploader_id = "" if uploader is not None else request.GET.get("uploader", "").strip()
     if uploader_id:
         try:
-            records = records.filter(uploads__uploader_id=int(uploader_id)).distinct()
+            records = records.filter(uploaders__id=int(uploader_id))
         except ValueError:
             records = records.none()
     query = request.GET.get("q", "").strip()
@@ -257,10 +339,9 @@ def library(request, uploader=None):
         "uploader_id": uploader_id,
         "journal_options": scoped_records.exclude(journal="").order_by("journal").values_list("journal", flat=True).distinct(),
         "year_options": scoped_records.exclude(publication_year=None).order_by("-publication_year").values_list("publication_year", flat=True).distinct(),
-        "uploader_options": UploadedDocument.objects.filter(
-            canonical_document__in=scoped_records,
-            status=UploadedDocument.Status.UPLOADED,
-        ).order_by("uploader__username").values("uploader_id", "uploader__username").distinct(),
+        "uploader_options": CanonicalDocument.uploaders.through.objects.filter(
+            canonicaldocument__in=scoped_records,
+        ).order_by("user__username").values("user_id", "user__username").distinct(),
         "pagination_query": pagination_query.urlencode(),
         "is_my_uploads": uploader is not None,
         "list_url_name": "upload-history" if uploader is not None else "library",

@@ -280,11 +280,10 @@ def _upsert_zotero_item(library_id, mapped):
         _merge_zotero_metadata(reference.canonical_document, library_id, mapped)
         return reference.canonical_document, False
 
-    canonical = None
     if mapped["doi"]:
-        canonical = CanonicalDocument.objects.filter(doi__iexact=mapped["doi"]).first()
-    created = canonical is None
-    canonical = canonical or CanonicalDocument.objects.create()
+        canonical, created = CanonicalDocument.objects.get_or_create(doi=mapped["doi"])
+    else:
+        canonical, created = CanonicalDocument.objects.create(), True
     _merge_zotero_metadata(canonical, library_id, mapped)
     ExternalReference.objects.create(
         canonical_document=canonical,
@@ -306,6 +305,11 @@ def _import_zotero_pdf(
     request_file=None,
     store_file=None,
 ):
+    if canonical.uploads.filter(status=UploadedDocument.Status.UPLOADED).exists():
+        already_uploaded = canonical.uploaders.filter(pk=uploader.pk).exists()
+        canonical.uploaders.add(uploader)
+        return "skipped" if already_uploaded else "reused"
+
     base_url, library_path, _base_parts = _zotero_library_context(library_type, library_id, api_key)
     file_url = f"{base_url}{library_path}/items/{quote(attachment['item_key'], safe='')}/file"
     request_file = request_file or _request_file

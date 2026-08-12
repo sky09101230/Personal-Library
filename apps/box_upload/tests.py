@@ -1,4 +1,5 @@
 from io import BytesIO
+from threading import Barrier
 from unittest.mock import MagicMock, patch
 import hashlib
 import json
@@ -7,6 +8,7 @@ from django.urls import reverse
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.contrib import admin
 from django.contrib.auth.models import User
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 
 from .services import (
@@ -18,7 +20,13 @@ from .services import (
     upload_to_nju_box,
 )
 from .storage import NAS_WEBDAV, StoredLiteratureObject
-from .metadata import MetadataResolutionError, extract_pdf_evidence, parse_bibtex_metadata, resolve_pdf_metadata
+from .metadata import (
+    MetadataResolutionError,
+    extract_pdf_evidence,
+    parse_bibtex_metadata,
+    resolve_pdf_metadata,
+    select_pdf_doi,
+)
 from .models import CanonicalDocument, ExternalReference, UploadedDocument
 from .zotero import import_zotero_library
 
@@ -33,6 +41,7 @@ class UploadPageTests(TestCase):
         self.assertContains(response, "PLAB Literature")
         self.assertContains(response, 'multiple')
         self.assertContains(response, "window.alert(result.message)")
+        self.assertContains(response, "window.alert(result.notice)")
         self.assertContains(response, "progress.classList.remove('error')")
 
     @patch.dict("os.environ", {
@@ -187,6 +196,103 @@ class UploadPageTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(canonical.index_status, CanonicalDocument.IndexStatus.PUBLISHED)
 
+    @patch("apps.box_upload.views.store_literature")
+    @patch("apps.box_upload.views.fetch_doi_bibtex")
+    @patch("apps.box_upload.views.extract_pdf_evidence", return_value={"doi": "10.1000/same"})
+    def test_same_uploader_and_doi_is_reported_and_skipped(self, extract_evidence, fetch_bibtex, store):
+        canonical = CanonicalDocument.objects.create(doi="10.1000/same", sha256="1" * 64)
+        UploadedDocument.objects.create(
+            canonical_document=canonical,
+            uploader=self.user,
+            original_name="existing.pdf",
+            remote_path="/existing.pdf",
+            sha256="1" * 64,
+            size=1,
+        )
+
+        response = self.client.post(
+            "/upload/",
+            data={"files": [SimpleUploadedFile("duplicate.pdf", b"different-content")]},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 0)
+        self.assertEqual(response.json()["skipped"], 1)
+        self.assertIn("你已上传过该文献", response.json()["notice"])
+        self.assertEqual(UploadedDocument.objects.count(), 1)
+        store.assert_not_called()
+        fetch_bibtex.assert_not_called()
+
+    @patch("apps.box_upload.views.store_literature")
+    @patch("apps.box_upload.views.fetch_doi_bibtex")
+    @patch("apps.box_upload.views.extract_pdf_evidence", return_value={"doi": "10.1000/shared"})
+    def test_different_uploader_and_same_doi_is_merged_without_pdf(self, extract_evidence, fetch_bibtex, store):
+        other_user = User.objects.create_user(username="other", password="Strong-pass-1234")
+        canonical = CanonicalDocument.objects.create(doi="10.1000/shared", sha256="2" * 64)
+        UploadedDocument.objects.create(
+            canonical_document=canonical,
+            uploader=other_user,
+            original_name="existing.pdf",
+            remote_path="/existing.pdf",
+            sha256="2" * 64,
+            size=1,
+        )
+
+        response = self.client.post(
+            "/upload/",
+            data={"files": [SimpleUploadedFile("shared.pdf", b"different-content")]},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 0)
+        self.assertEqual(response.json()["merged"], 1)
+        self.assertIn("已加入上传者", response.json()["notice"])
+        self.assertEqual(UploadedDocument.objects.count(), 1)
+        self.assertEqual(set(canonical.uploaders.values_list("username", flat=True)), {"member", "other"})
+        store.assert_not_called()
+        fetch_bibtex.assert_not_called()
+
+    def test_doi_is_unique_ignoring_case(self):
+        CanonicalDocument.objects.create(doi="10.1000/CASE")
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            CanonicalDocument.objects.create(doi="10.1000/case")
+
+    @patch("apps.box_upload.views.enqueue_metadata_proposal_safely")
+    @patch("apps.box_upload.views.resolve_pdf_metadata_safely")
+    @patch("apps.box_upload.views.store_literature", return_value=StoredLiteratureObject(NAS_WEBDAV, "/paper.pdf"))
+    @patch("apps.box_upload.views.fetch_doi_bibtex")
+    @patch("apps.box_upload.views.extract_pdf_evidence")
+    def test_upload_uses_title_matched_doi_before_storage(
+        self, extract_evidence, fetch_bibtex, store, resolve_metadata, enqueue_metadata
+    ):
+        extract_evidence.return_value = {
+            "doi": "10.5281/zenodo.19590759",
+            "title": "Holographic lasing with dielectric metasurfaces",
+            "doi_candidates": [
+                {"doi": "10.5281/zenodo.19590759", "source": "pdf_page", "page": 9},
+                {"doi": "10.1126/sciadv.aea7345", "source": "pdf_page", "page": 9},
+            ],
+            "doi_source": {"source": "pdf_page", "page": 9},
+        }
+        records = {
+            "10.5281/zenodo.19590759": "@misc{wrong, title={MATLAB code for genetic optimization of a holographic lasing metasurface}, author={Doe, Jane}, year={2026}, doi={10.5281/zenodo.19590759}}",
+            "10.1126/sciadv.aea7345": "@article{right, title={Holographic lasing with dielectric metasurfaces}, author={Doe, Jane}, year={2026}, doi={10.1126/sciadv.aea7345}}",
+        }
+        fetch_bibtex.side_effect = records.__getitem__
+
+        response = self.client.post(
+            "/upload/",
+            data={"files": [SimpleUploadedFile("paper.pdf", b"%PDF-1.7\nmock")]},
+            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(CanonicalDocument.objects.get().doi, "10.1126/sciadv.aea7345")
+        store.assert_called_once()
+
     def test_home_shows_workspace_entries_without_upload_form(self):
         response = self.client.get("/")
 
@@ -201,6 +307,34 @@ class UploadPageTests(TestCase):
         self.user.is_staff = True
         self.user.save(update_fields=["is_staff"])
         self.assertContains(self.client.get("/"), "进入管理后台")
+
+    def test_home_explains_attachment_count_and_reuses_library_rows(self):
+        canonical = CanonicalDocument.objects.create(
+            title="One canonical paper",
+            abstract="Summary visible only in Library",
+            sha256="f" * 64,
+        )
+        for index in range(2):
+            UploadedDocument.objects.create(
+                canonical_document=canonical,
+                uploader=self.user,
+                original_name=f"attachment-{index}.pdf",
+                remote_path=f"/attachment-{index}.pdf",
+                sha256=f"{index + 1:064x}",
+                size=1,
+            )
+
+        response = self.client.get("/")
+
+        self.assertEqual(response.context["record_count"], 2)
+        self.assertEqual(response.context["canonical_count"], 1)
+        self.assertEqual(len(response.context["recent_literature"]), 1)
+        self.assertContains(response, "每次上传或导入计一条")
+        self.assertContains(response, "同一篇文献只计一次")
+        self.assertContains(response, '<table class="literature-table">')
+        self.assertContains(response, "One canonical paper", count=1)
+        self.assertNotContains(response, "Summary visible only in Library")
+        self.assertContains(self.client.get("/library/"), "Summary visible only in Library")
 
     def test_upload_history_only_shows_current_user_records(self):
         canonical = CanonicalDocument.objects.create(sha256="a" * 64)
@@ -229,9 +363,10 @@ class UploadPageTests(TestCase):
         self.assertContains(response, "我的上传")
         self.assertContains(response, "mine.pdf")
         self.assertNotContains(response, "other.pdf")
-        self.assertContains(response, '<div class="file-meta">上传者：member</div>', html=True)
+        self.assertContains(response, '<div class="file-meta">上传者：member、other</div>', html=True)
         self.assertNotContains(response, '<div class="file-meta">mine.pdf · 上传者：member</div>', html=True)
         self.assertContains(response, f'/uploads/{UploadedDocument.objects.get(original_name="mine.pdf").pk}/delete/')
+        self.assertNotContains(response, f'/uploads/{UploadedDocument.objects.get(original_name="other.pdf").pk}/delete/')
 
     def test_library_is_paginated(self):
         for index in range(21):
@@ -951,6 +1086,47 @@ class UploadPageTests(TestCase):
 
 
 class MetadataResolutionTests(TestCase):
+    def test_multiple_dois_select_the_work_whose_title_matches_the_pdf(self):
+        cases = [
+            (
+                "Optical corner detection with azimuthal Hilbert transform metasurfaces",
+                "10.3788/pi.2023.r01",
+                "Revolutionary meta-imaging: from superlens to metalens",
+                "10.1126/sciadv.aed8301",
+            ),
+            (
+                "Holographic lasing with dielectric metasurfaces",
+                "10.5281/zenodo.19590759",
+                "MATLAB code for genetic optimization of a holographic lasing metasurface",
+                "10.1126/sciadv.aea7345",
+            ),
+        ]
+        for pdf_title, first_doi, first_title, expected_doi in cases:
+            with self.subTest(pdf_title=pdf_title):
+                evidence = {
+                    "doi": first_doi,
+                    "title": pdf_title,
+                    "doi_candidates": [
+                        {"doi": first_doi, "source": "pdf_page", "page": 8},
+                        {"doi": expected_doi, "source": "pdf_page", "page": 9},
+                    ],
+                    "doi_source": {"source": "pdf_page", "page": 8},
+                }
+                bibtex = {
+                    first_doi: f"@article{{wrong, title={{{first_title}}}, author={{Doe, Jane}}, year={{2026}}, doi={{{first_doi}}}}}",
+                    expected_doi: f"@article{{right, title={{{pdf_title}}}, author={{Doe, Jane}}, year={{2026}}, doi={{{expected_doi}}}}}",
+                }
+                barrier = Barrier(len(bibtex))
+
+                def concurrent_fetch(doi):
+                    barrier.wait(timeout=1)
+                    return bibtex[doi]
+
+                doi, _ = select_pdf_doi(evidence, bibtex_fetcher=concurrent_fetch)
+
+                self.assertEqual(doi, expected_doi)
+                self.assertEqual(evidence["doi"], expected_doi)
+
     @patch("apps.box_upload.metadata.PdfReader")
     def test_doi_scan_reads_first_two_and_last_two_pages(self, pdf_reader):
         class Page:
@@ -1077,6 +1253,22 @@ class MetadataResolutionTests(TestCase):
         self.assertEqual(entry["month"], "September")
         self.assertEqual(metadata["title"], "September paper")
 
+    def test_bibtex_parser_accepts_full_month_names_case_insensitively(self):
+        months = (
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December",
+        )
+        for month in months:
+            for value in (month, month.lower(), month.upper()):
+                with self.subTest(value=value):
+                    entry, metadata = parse_bibtex_metadata(
+                        f"@article{{paper, title={{Month paper}}, month={value}, doi={{10.1000/MONTH.1}}}}",
+                        expected_doi="10.1000/month.1",
+                    )
+
+                    self.assertEqual(entry["month"], month)
+                    self.assertEqual(metadata["title"], "Month paper")
+
     def test_bibtex_doi_conflict_is_not_verified(self):
         canonical = CanonicalDocument.objects.create(sha256="7" * 64)
         uploaded = SimpleUploadedFile("paper.pdf", b"%PDF-1.7\n10.1000/PDF.1")
@@ -1193,10 +1385,6 @@ class ZoteroImportTests(TestCase):
                 return self._request_page(url, api_key)
             if "start=100" in url:
                 return ([
-                    {"key": "BROKEN", "data": {
-                        "itemType": "attachment", "linkMode": "imported_file",
-                        "contentType": "application/pdf", "filename": "broken.pdf",
-                    }},
                     {"key": "SAME", "data": {
                         "itemType": "attachment", "linkMode": "imported_file",
                         "contentType": "application/pdf", "filename": "same.pdf",
@@ -1207,6 +1395,10 @@ class ZoteroImportTests(TestCase):
                     }},
                 ], {})
             return ([
+                {"key": "BROKEN", "data": {
+                    "itemType": "attachment", "linkMode": "imported_file",
+                    "contentType": "application/pdf", "filename": "broken.pdf",
+                }},
                 {"key": "HOSTED", "data": {
                     "itemType": "attachment", "linkMode": "imported_file",
                     "contentType": "application/pdf", "filename": "hosted.pdf",
@@ -1238,13 +1430,47 @@ class ZoteroImportTests(TestCase):
 
         self.assertEqual(
             {key: result[key] for key in ("pdf_imported", "pdf_reused", "pdf_skipped", "pdf_failed")},
-            {"pdf_imported": 1, "pdf_reused": 1, "pdf_skipped": 3, "pdf_failed": 1},
+            {"pdf_imported": 1, "pdf_reused": 0, "pdf_skipped": 4, "pdf_failed": 1},
         )
         self.assertIn("broken.pdf", result["pdf_failures"][0])
         self.assertEqual(UploadedDocument.objects.count(), 1)
         self.assertEqual(UploadedDocument.objects.get().original_name, "hosted.pdf")
         self.assertEqual(store_file.call_count, 1)
         self.assertEqual(CanonicalDocument.objects.get().title, "Structured Zotero paper")
+
+    def test_existing_doi_pdf_merges_a_different_zotero_uploader_without_download(self):
+        from .zotero import _import_zotero_pdf
+
+        owner = User.objects.create_user(username="owner", password="test-pass")
+        newcomer = User.objects.create_user(username="newcomer", password="test-pass")
+        canonical = CanonicalDocument.objects.create(doi="10.1000/shared-zotero", sha256="9" * 64)
+        UploadedDocument.objects.create(
+            canonical_document=canonical,
+            uploader=owner,
+            original_name="existing.pdf",
+            remote_path="/existing.pdf",
+            sha256="9" * 64,
+            size=1,
+        )
+        request_file = MagicMock()
+        store_file = MagicMock()
+
+        outcome = _import_zotero_pdf(
+            canonical,
+            newcomer,
+            "users",
+            "123",
+            "secret-key",
+            {"item_key": "ATTACHMENT", "filename": "paper.pdf"},
+            request_file=request_file,
+            store_file=store_file,
+        )
+
+        self.assertEqual(outcome, "reused")
+        self.assertEqual(set(canonical.uploaders.values_list("username", flat=True)), {"owner", "newcomer"})
+        self.assertEqual(UploadedDocument.objects.count(), 1)
+        request_file.assert_not_called()
+        store_file.assert_not_called()
 
     def test_removes_stored_pdf_if_upload_row_creation_fails(self):
         from .zotero import _import_zotero_pdf

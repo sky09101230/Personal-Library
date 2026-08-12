@@ -15,7 +15,7 @@
       </div>
     </form>
   </div>
-  <aside class="side-note"><strong>处理边界</strong><p>相同内容共享同一条规范文献记录。</p><p>发现 DOI 时会在写入 NAS 前预检 BibTeX；失败将停止本次上传。没有 DOI 不受影响。</p></aside>
+  <aside class="side-note"><strong>处理边界</strong><p>相同 DOI 只保留一篇文献和一份 PDF；其他上传者会合并到该文献。</p><p>发现 DOI 时会在写入 NAS 前预检 BibTeX；失败将停止本次上传。没有 DOI 不受影响。</p></aside>
 </div>
 <script>
 (() => {
@@ -46,7 +46,8 @@
       let result = {};
       try { result = JSON.parse(request.responseText); } catch (error) { result = { ok: false, message: 'Unexpected server response.' }; }
       if (request.status >= 200 && request.status < 300 && result.ok) {
-        bar.classList.remove('indeterminate'); bar.style.width = '100%'; percent.textContent = '100%'; status.textContent = `Completed ${result.count} file(s)`;
+        bar.classList.remove('indeterminate'); bar.style.width = '100%'; percent.textContent = '100%'; status.textContent = result.notice || `Completed ${result.count} file(s)`;
+        if (result.notice) { window.alert(result.notice); }
         window.setTimeout(() => { window.location.href = '{% url "library" %}'; }, 700);
       } else {
         bar.classList.remove('indeterminate'); status.textContent = result.message || 'Upload failed'; percent.textContent = '';
