@@ -1,10 +1,11 @@
 import base64
+import hashlib
 from urllib.parse import urlsplit
 from unittest.mock import patch
 
 from django.contrib.auth.models import User
 from django.conf import settings
-from django.test import Client, TransactionTestCase
+from django.test import Client, TransactionTestCase, override_settings
 from starlette.testclient import TestClient
 
 from apps.box_upload.models import CanonicalDocument, UploadedDocument
@@ -177,6 +178,91 @@ class McpHttpTests(TransactionTestCase):
             remote_path="/public/PLAB_KnowledgeBase/Literature/uploaded.pdf",
             storage_backend=NAS_WEBDAV,
         ).exists())
+        uploaded = UploadedDocument.objects.get(original_name="uploaded.pdf")
+        self.assertEqual(
+            uploaded.canonical_document.index_status,
+            CanonicalDocument.IndexStatus.PUBLISHED,
+        )
+        store_file.assert_called_once()
+
+        listed = self._call(self.mcp_client, "list_literature", {"query": "uploaded.pdf"})
+        self.assertIn(f"文献 ID: {uploaded.canonical_document_id}", self._tool_text(listed))
+
+    @patch("apps.mcp_gateway.server.store_literature")
+    def test_mcp_rejects_invalid_pdf_before_storage(self, store_file):
+        self.assertEqual(self._initialize(self.mcp_client).status_code, 200)
+
+        response = self._call(self.mcp_client, "upload_literature", {
+            "filename": "fake.pdf",
+            "content_base64": base64.b64encode(b"not a pdf").decode("ascii"),
+            "content_type": "application/pdf",
+        })
+
+        self.assertTrue(response.json()["result"].get("isError"))
+        self.assertIn("有效 PDF", self._tool_text(response))
+        store_file.assert_not_called()
+
+    @override_settings(MCP_MAX_UPLOAD_BYTES=12)
+    @patch("apps.mcp_gateway.server.store_literature")
+    def test_mcp_rejects_oversized_pdf_before_storage(self, store_file):
+        self.assertEqual(self._initialize(self.mcp_client).status_code, 200)
+
+        response = self._call(self.mcp_client, "upload_literature", {
+            "filename": "large.pdf",
+            "content_base64": base64.b64encode(b"%PDF-1.7\nlarge").decode("ascii"),
+            "content_type": "application/pdf",
+        })
+
+        self.assertTrue(response.json()["result"].get("isError"))
+        store_file.assert_not_called()
+
+    @patch("apps.mcp_gateway.server.extract_pdf_evidence", return_value={"doi": "10.1000/existing"})
+    @patch(
+        "apps.mcp_gateway.server.store_literature",
+        return_value=StoredLiteratureObject(NAS_WEBDAV, "/literature/existing-doi.pdf"),
+    )
+    def test_mcp_reuses_existing_doi_canonical_and_publishes_it(self, store_file, extract_evidence):
+        existing = CanonicalDocument.objects.create(doi="10.1000/existing", title="Existing DOI")
+        before_count = CanonicalDocument.objects.count()
+        self.assertEqual(self._initialize(self.mcp_client).status_code, 200)
+
+        response = self._call(self.mcp_client, "upload_literature", {
+            "filename": "existing-doi.pdf",
+            "content_base64": base64.b64encode(b"%PDF-1.7\nexisting DOI").decode("ascii"),
+            "content_type": "application/pdf",
+        })
+
+        self.assertIn("上传成功", self._tool_text(response))
+        existing.refresh_from_db()
+        self.assertEqual(CanonicalDocument.objects.count(), before_count)
+        self.assertEqual(existing.index_status, CanonicalDocument.IndexStatus.PUBLISHED)
+        self.assertTrue(existing.uploads.filter(original_name="existing-doi.pdf").exists())
+        extract_evidence.assert_called_once()
+        store_file.assert_called_once()
+
+    @patch("apps.mcp_gateway.server.extract_pdf_evidence", return_value={"doi": None})
+    @patch(
+        "apps.mcp_gateway.server.store_literature",
+        return_value=StoredLiteratureObject(NAS_WEBDAV, "/literature/existing-sha.pdf"),
+    )
+    def test_mcp_reuses_sha_canonical_when_pdf_has_no_doi(self, store_file, extract_evidence):
+        content = b"%PDF-1.7\nexisting SHA"
+        existing = CanonicalDocument.objects.create(sha256=hashlib.sha256(content).hexdigest())
+        before_count = CanonicalDocument.objects.count()
+        self.assertEqual(self._initialize(self.mcp_client).status_code, 200)
+
+        response = self._call(self.mcp_client, "upload_literature", {
+            "filename": "existing-sha.pdf",
+            "content_base64": base64.b64encode(content).decode("ascii"),
+            "content_type": "application/pdf",
+        })
+
+        self.assertIn("上传成功", self._tool_text(response))
+        existing.refresh_from_db()
+        self.assertEqual(CanonicalDocument.objects.count(), before_count)
+        self.assertEqual(existing.index_status, CanonicalDocument.IndexStatus.PUBLISHED)
+        self.assertTrue(existing.uploads.filter(original_name="existing-sha.pdf").exists())
+        extract_evidence.assert_called_once()
         store_file.assert_called_once()
 
     def test_mcp_enforces_tool_scope(self):

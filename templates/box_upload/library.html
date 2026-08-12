@@ -1,14 +1,14 @@
 {% extends "base.html" %}
-{% block title %}{% if is_my_uploads %}我的上传{% else %}文献库{% endif %} | PLAB{% endblock %}
+{% block title %}{% if is_my_uploads %}我的文献{% else %}文献库{% endif %} | PLAB{% endblock %}
 {% block content_class %}content-wide{% endblock %}
 {% block content %}
 <div class="page-head">
   <p class="eyebrow">{% if is_my_uploads %}My Library{% else %}PLAB Literature{% endif %}</p>
-  <h1>{% if is_my_uploads %}我的上传{% else %}文献库{% endif %}</h1>
-  <p class="subtle">{% if is_my_uploads %}仅显示你上传的 PDF，并可在这里删除自己的附件。{% else %}集中查看核心 metadata、摘要、处理状态和常用操作；待复核内容不会自动进入 Agent 上下文。{% endif %}</p>
+  <h1>{% if is_my_uploads %}我的文献{% else %}文献库{% endif %}</h1>
+  <p class="subtle">{% if is_my_uploads %}包括你实际上传的 PDF，也包括通过 DOI 或 Zotero 关联到你的文献；你只能审核和删除自己实际提交的附件。{% else %}集中查看核心 metadata、摘要、处理状态和常用操作；待复核内容不会自动进入 Agent 上下文。{% endif %}</p>
 </div>
 {% if messages %}{% for message in messages %}<div class="notice{% if message.tags == 'error' %} error{% endif %}" role="status">{{ message }}</div>{% endfor %}{% endif %}
-<section class="library-summary" aria-label="{% if is_my_uploads %}我的上传摘要{% else %}文献库摘要{% endif %}">
+<section class="library-summary" aria-label="{% if is_my_uploads %}我的文献摘要{% else %}文献库摘要{% endif %}">
   <div class="library-stat"><strong>{{ record_count }}</strong><span>当前结果</span></div>
   <div class="library-stat"><strong>{{ review_count }}</strong><span>元数据需处理</span><small>不完整、待复核或冲突 · <a href="{% url list_url_name %}?workflow=review#literature-table">查看并处理</a></small></div>
   <div class="library-stat"><strong>{{ proposal_review_count }}</strong><span>待我确认</span><small>DeepSeek 建议 · <a href="{% url 'metadata-review-queue' %}">打开审核队列</a></small></div>
@@ -24,7 +24,7 @@
       <input id="library-search" type="search" name="q" value="{{ query }}" placeholder="文件名、标题、期刊或 DOI">
       <select name="journal" aria-label="期刊"><option value="">全部期刊</option>{% for option in journal_options %}<option value="{{ option }}"{% if journal == option %} selected{% endif %}>{{ option }}</option>{% endfor %}</select>
       <select name="year" aria-label="年份"><option value="">全部年份</option>{% for option in year_options %}<option value="{{ option }}"{% if year == option|stringformat:'s' %} selected{% endif %}>{{ option }}</option>{% endfor %}</select>
-      {% if not is_my_uploads %}<select name="uploader" aria-label="上传者"><option value="">全部上传者</option>{% for option in uploader_options %}<option value="{{ option.user_id }}"{% if uploader_id == option.user_id|stringformat:'s' %} selected{% endif %}>{{ option.user__username }}</option>{% endfor %}</select>{% endif %}
+      {% if not is_my_uploads %}<select name="uploader" aria-label="关联用户"><option value="">全部关联用户</option>{% for option in uploader_options %}<option value="{{ option.user_id }}"{% if uploader_id == option.user_id|stringformat:'s' %} selected{% endif %}>{{ option.user__username }}</option>{% endfor %}</select>{% endif %}
       <button class="primary" type="submit">筛选</button>
       {% if query or workflow or journal or year or uploader_id %}<a href="{% url list_url_name %}">显示全部</a>{% endif %}
     </div>

@@ -266,6 +266,7 @@ class MetadataReviewViewTests(TestCase):
     def test_only_uploader_or_staff_can_open_proposal(self):
         self.client.force_login(self.owner)
         owner_response = self.client.get(f"/library/metadata-review/{self.proposal.pk}/")
+        self.canonical.uploaders.add(self.other)
         self.client.force_login(self.other)
         other_response = self.client.get(f"/library/metadata-review/{self.proposal.pk}/")
 

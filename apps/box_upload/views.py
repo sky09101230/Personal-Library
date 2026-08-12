@@ -1,4 +1,3 @@
-import hashlib
 import json
 import os
 import re
@@ -7,7 +6,6 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core import signing
 from django.core.exceptions import PermissionDenied
-from django.db import transaction
 from django.db.models import Prefetch, Q
 from django.http import Http404, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.core.paginator import Paginator
@@ -17,6 +15,7 @@ from django.views.decorators.http import require_GET, require_POST
 
 from .downloads import load_literature_download_token
 from .forms import BoxUploadForm, MetadataReviewForm, ZoteroImportForm
+from .ingestion import PdfValidationError, associate_existing_pdf, prepare_pdf, save_pdf_upload
 from .metadata import (
     MetadataResolutionError,
     extract_pdf_evidence,
@@ -29,7 +28,7 @@ from .metadata_jobs import enqueue_metadata_proposal, enqueue_metadata_proposal_
 from .metadata_review import apply_metadata_proposal, can_review_document, proposals_for_user, reject_metadata_proposal
 from .models import CanonicalDocument, MetadataProposal, UploadedDocument, ZoteroConnection
 from .services import LiteratureStorageError
-from .storage import delete_literature, get_literature_storage, open_literature_stream, store_literature
+from .storage import delete_literature, open_literature_stream, store_literature
 from .zotero import (
     ZoteroImportError,
     decrypt_zotero_api_key,
@@ -42,15 +41,6 @@ from .zotero import (
 
 
 _SINGLE_BYTE_RANGE = re.compile(r"^bytes=(?:\d+-\d*|-\d+)$")
-
-
-def _sha256(uploaded_file):
-    digest = hashlib.sha256()
-    uploaded_file.seek(0)
-    for chunk in uploaded_file.chunks():
-        digest.update(chunk)
-    uploaded_file.seek(0)
-    return digest.hexdigest()
 
 
 def _proposal_form_values(proposed):
@@ -126,120 +116,102 @@ def upload(request):
                 prepared_files = []
                 prefetched_bibtex = {}
                 for uploaded_file in form.cleaned_data["files"]:
-                    digest = _sha256(uploaded_file)
-                    evidence = extract_pdf_evidence(uploaded_file)
+                    prepared = prepare_pdf(uploaded_file)
+                    evidence = extract_pdf_evidence(prepared.uploaded_file)
                     doi = normalize_doi(evidence["doi"])
                     if len(evidence.get("doi_candidates") or []) > 1:
                         doi, bibtex = select_pdf_doi(evidence, bibtex_fetcher=fetch_doi_bibtex)
                         prefetched_bibtex[doi] = bibtex
-                    existing = CanonicalDocument.objects.filter(doi__iexact=doi).first() if doi else None
-                    if doi and existing is None and doi not in prefetched_bibtex:
+                    doi_existing = CanonicalDocument.objects.filter(doi__iexact=doi).first() if doi else None
+                    if doi and doi_existing is None and doi not in prefetched_bibtex:
                         prefetched_bibtex[doi] = fetch_doi_bibtex(doi)
-                    prepared_files.append((uploaded_file, digest, doi, existing))
+                    prepared_files.append((prepared, doi))
 
-                for uploaded_file, digest, doi, existing in prepared_files:
+                for prepared, doi in prepared_files:
+                    doi_existing = None
                     if doi:
-                        existing = CanonicalDocument.objects.filter(doi__iexact=doi).first()
-                    if existing and existing.uploads.filter(status=UploadedDocument.Status.UPLOADED).exists():
-                        if existing.uploaders.filter(pk=request.user.pk).exists():
+                        doi_existing = CanonicalDocument.objects.filter(doi__iexact=doi).first()
+                    existing = doi_existing or CanonicalDocument.objects.filter(sha256=prepared.sha256).first()
+                    if doi_existing:
+                        association = associate_existing_pdf(doi_existing, request.user)
+                    else:
+                        association = None
+                    if association:
+                        if association == "skipped":
                             skipped_count += 1
-                            duplicate_notices.append(f"{uploaded_file.name}：你已上传过该文献，已跳过")
+                            duplicate_notices.append(f"{prepared.filename}：已在你的文献中，已跳过")
                         else:
-                            existing.uploaders.add(request.user)
                             merged_count += 1
                             duplicate_notices.append(
-                                f"{uploaded_file.name}：文献已存在，已加入上传者，未重复保存 PDF"
+                                f"{prepared.filename}：文献已存在，已关联到我的文献，未重复保存 PDF"
                             )
                         continue
 
-                    stored = store_literature(uploaded_file)
-                    race_outcome = ""
-                    try:
-                        with transaction.atomic():
-                            if existing is not None:
-                                canonical, created = existing, False
-                            elif doi:
-                                canonical, created = CanonicalDocument.objects.get_or_create(
-                                    doi=doi,
-                                    defaults={
-                                        "sha256": digest,
-                                        "index_status": CanonicalDocument.IndexStatus.PUBLISHED,
-                                    },
-                                )
+                    if existing is not None:
+                        canonical, created = existing, False
+                    elif doi:
+                        canonical, created = CanonicalDocument.objects.get_or_create(
+                            doi=doi,
+                            defaults={"sha256": prepared.sha256},
+                        )
+                    else:
+                        canonical, created = CanonicalDocument.objects.get_or_create(sha256=prepared.sha256)
+                    if doi and not created and canonical.doi.casefold() == doi.casefold():
+                        association = associate_existing_pdf(canonical, request.user)
+                        if association:
+                            if association == "skipped":
+                                skipped_count += 1
+                                duplicate_notices.append(f"{prepared.filename}：已在你的文献中，已跳过")
                             else:
-                                canonical, created = CanonicalDocument.objects.get_or_create(
-                                    sha256=digest,
-                                    defaults={"index_status": CanonicalDocument.IndexStatus.PUBLISHED},
+                                merged_count += 1
+                                duplicate_notices.append(
+                                    f"{prepared.filename}：文献已存在，已关联到我的文献，未重复保存 PDF"
                                 )
-                            has_uploaded_pdf = canonical.uploads.filter(
-                                status=UploadedDocument.Status.UPLOADED
-                            ).exists()
-                            if doi and not created and has_uploaded_pdf:
-                                already_uploaded = canonical.uploaders.filter(pk=request.user.pk).exists()
-                                race_outcome = "skipped" if already_uploaded else "merged"
-                                upload_record = None
-                            else:
-                                upload_record = UploadedDocument.objects.create(
-                                    canonical_document=canonical,
-                                    uploader=request.user,
-                                    original_name=uploaded_file.name,
-                                    remote_path=stored.remote_path,
-                                    storage_backend=stored.backend,
-                                    sha256=digest,
-                                    size=uploaded_file.size,
-                                    content_type=uploaded_file.content_type or "",
-                                    duplicate_type=(
-                                        UploadedDocument.DuplicateType.NEW
-                                        if created or not has_uploaded_pdf
-                                        else UploadedDocument.DuplicateType.EXACT
-                                    ),
-                                )
-                            if not created and canonical.index_status != CanonicalDocument.IndexStatus.PUBLISHED:
-                                canonical.index_status = CanonicalDocument.IndexStatus.PUBLISHED
-                                canonical.save(update_fields=["index_status", "updated_at"])
-                    except Exception:
-                        try:
-                            get_literature_storage(stored.backend).delete(stored.remote_path)
-                        except LiteratureStorageError:
-                            pass
-                        raise
-                    if race_outcome:
-                        get_literature_storage(stored.backend).delete(stored.remote_path)
-                        canonical.uploaders.add(request.user)
-                        if race_outcome == "skipped":
-                            skipped_count += 1
-                            duplicate_notices.append(f"{uploaded_file.name}：你已上传过该文献，已跳过")
-                        else:
-                            merged_count += 1
-                            duplicate_notices.append(
-                                f"{uploaded_file.name}：文献已存在，已加入上传者，未重复保存 PDF"
-                            )
+                            continue
+                    upload_record = save_pdf_upload(
+                        canonical,
+                        request.user,
+                        prepared,
+                        store_file=store_literature,
+                        reuse_existing_pdf=bool(doi),
+                    )
+                    if upload_record is None:
+                        skipped_count += 1
+                        duplicate_notices.append(
+                            f"{prepared.filename}：文献已由另一请求保存，未重复保存 PDF"
+                        )
                         continue
-                    remote_paths.append(stored.remote_path)
+                    remote_paths.append(upload_record.remote_path)
                     if created:
                         bibtex = prefetched_bibtex.get(doi)
                         resolve_pdf_metadata_safely(
                             canonical,
-                            uploaded_file,
+                            prepared.uploaded_file,
                             bibtex_fetcher=(lambda _doi, value=bibtex: value) if bibtex is not None else None,
                         )
                     enqueue_metadata_proposal_safely(
                         canonical,
                         requested_by=request.user,
                         source_upload=upload_record,
-                        uploaded_file=uploaded_file,
+                        uploaded_file=prepared.uploaded_file,
                     )
-            except (LiteratureStorageError, MetadataResolutionError) as exc:
+            except (LiteratureStorageError, MetadataResolutionError, PdfValidationError) as exc:
                 preflight_failed = isinstance(exc, MetadataResolutionError)
-                message = (
-                    f"DOI BibTeX 预检失败，已停止上传：{exc}"
-                    if preflight_failed
-                    else f"已上传 {len(remote_paths)} 个文件后失败：{exc}"
-                )
+                invalid_pdf = isinstance(exc, PdfValidationError)
+                if preflight_failed:
+                    message = f"DOI BibTeX 预检失败，已停止上传：{exc}"
+                elif invalid_pdf:
+                    message = f"PDF 校验失败，已停止上传：{exc}"
+                else:
+                    message = f"已上传 {len(remote_paths)} 个文件后失败：{exc}"
                 if is_ajax:
                     return JsonResponse({
                         "ok": False,
-                        "code": "doi_bibtex_preflight_failed" if preflight_failed else "upload_failed",
+                        "code": (
+                            "doi_bibtex_preflight_failed"
+                            if preflight_failed
+                            else "invalid_pdf" if invalid_pdf else "upload_failed"
+                        ),
                         "message": message,
                     }, status=400)
                 form.add_error(None, message)
@@ -323,6 +295,10 @@ def library(request, uploader=None):
     for literature in page.object_list:
         literature.latest_metadata_proposal = next(iter(literature.metadata_proposals.all()), None)
         literature.can_review_ai_metadata = can_review_document(request.user, literature)
+        literature.has_own_upload = bool(
+            uploader is not None
+            and any(upload.uploader_id == uploader.pk for upload in literature.uploads.all())
+        )
     review_proposals = MetadataProposal.objects.filter(status=MetadataProposal.Status.SUCCEEDED)
     if not request.user.is_staff:
         review_proposals = review_proposals.filter(canonical_document__uploads__uploader=request.user).distinct()

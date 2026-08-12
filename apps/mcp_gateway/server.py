@@ -1,14 +1,13 @@
 import base64
 import binascii
-import hashlib
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from asgiref.sync import sync_to_async
 from django.conf import settings
+from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import transaction
 from django.db.models import Q
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings
@@ -17,10 +16,17 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from apps.box_upload.models import CanonicalDocument, UploadedDocument
 from apps.box_upload.downloads import build_literature_download_url
-from apps.box_upload.metadata import resolve_pdf_metadata_safely
+from apps.box_upload.ingestion import associate_existing_pdf, prepare_pdf, save_pdf_upload
+from apps.box_upload.metadata import (
+    extract_pdf_evidence,
+    fetch_doi_bibtex,
+    normalize_doi,
+    resolve_pdf_metadata_safely,
+    select_pdf_doi,
+)
 from apps.box_upload.metadata_jobs import enqueue_metadata_proposal_safely
 from apps.box_upload.services import LiteratureStorageError
-from apps.box_upload.storage import get_literature_storage, store_literature
+from apps.box_upload.storage import store_literature
 from apps.skills.downloads import build_skill_download_url
 from apps.skills.models import SharedSkill, SharedSkillRelease
 
@@ -170,35 +176,58 @@ def _get_skill_release(skill_id):
 @sync_to_async(thread_sensitive=True)
 def _save_upload(filename, content, content_type, uploader_id):
     uploaded_file = SimpleUploadedFile(filename, content, content_type=content_type)
-    stored = store_literature(uploaded_file)
-    digest = hashlib.sha256(content).hexdigest()
-    try:
-        with transaction.atomic():
-            canonical, created = CanonicalDocument.objects.get_or_create(sha256=digest)
-            document = UploadedDocument.objects.create(
-                canonical_document=canonical,
-                uploader_id=uploader_id,
-                original_name=filename,
-                remote_path=stored.remote_path,
-                storage_backend=stored.backend,
-                sha256=digest,
-                size=len(content),
-                content_type=content_type,
-                duplicate_type=(UploadedDocument.DuplicateType.NEW if created else UploadedDocument.DuplicateType.EXACT),
+    uploader = User.objects.get(pk=uploader_id)
+    prepared = prepare_pdf(uploaded_file)
+    evidence = extract_pdf_evidence(prepared.uploaded_file)
+    doi = normalize_doi(evidence["doi"])
+    prefetched_bibtex = None
+    if len(evidence.get("doi_candidates") or []) > 1:
+        doi, prefetched_bibtex = select_pdf_doi(evidence, bibtex_fetcher=fetch_doi_bibtex)
+
+    doi_existing = CanonicalDocument.objects.filter(doi__iexact=doi).first() if doi else None
+    canonical = doi_existing or CanonicalDocument.objects.filter(sha256=prepared.sha256).first()
+    if canonical is None:
+        if doi:
+            canonical, created = CanonicalDocument.objects.get_or_create(
+                doi=doi,
+                defaults={"sha256": prepared.sha256},
             )
-    except Exception:
-        try:
-            get_literature_storage(stored.backend).delete(stored.remote_path)
-        except LiteratureStorageError:
-            pass
-        raise
+        else:
+            canonical, created = CanonicalDocument.objects.get_or_create(sha256=prepared.sha256)
+    else:
+        created = False
+
+    if doi and not created and canonical.doi.casefold() == doi.casefold():
+        association = associate_existing_pdf(canonical, uploader)
+        if association:
+            canonical = CanonicalDocument.objects.prefetch_related("uploads").get(pk=canonical.pk)
+            return _document_data(canonical)
+
+    document = save_pdf_upload(
+        canonical,
+        uploader,
+        prepared,
+        store_file=store_literature,
+        reuse_existing_pdf=bool(doi),
+    )
+    if document is None:
+        canonical = CanonicalDocument.objects.prefetch_related("uploads").get(pk=canonical.pk)
+        return _document_data(canonical)
     if created:
-        resolve_pdf_metadata_safely(canonical, uploaded_file)
+        resolve_pdf_metadata_safely(
+            canonical,
+            prepared.uploaded_file,
+            bibtex_fetcher=(
+                (lambda _doi, value=prefetched_bibtex: value)
+                if prefetched_bibtex is not None
+                else None
+            ),
+        )
     enqueue_metadata_proposal_safely(
         canonical,
         requested_by=document.uploader,
         source_upload=document,
-        uploaded_file=uploaded_file,
+        uploaded_file=prepared.uploaded_file,
     )
     canonical = CanonicalDocument.objects.prefetch_related("uploads").get(pk=canonical.pk)
     return _document_data(canonical)
@@ -267,7 +296,7 @@ async def upload_literature(filename: str, content_base64: str, content_type: st
         content = base64.b64decode(content_base64, validate=True)
     except (ValueError, binascii.Error) as exc:
         raise ValueError("content_base64 不是有效的标准 Base64 内容。") from exc
-    if len(content) > settings.MCP_MAX_UPLOAD_BYTES or not content.startswith(b"%PDF-"):
+    if len(content) > settings.MCP_MAX_UPLOAD_BYTES:
         raise ValueError("上传内容必须是未超过大小限制的有效 PDF。")
     uploader_id = int(access_token.client_id.removeprefix("user:"))
     try:

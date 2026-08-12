@@ -12,9 +12,10 @@ from django.conf import settings
 from django.core.files import File
 from django.db import transaction
 
+from .ingestion import associate_existing_pdf, prepare_pdf, save_pdf_upload
 from .metadata import normalize_doi
-from .models import CanonicalDocument, ExternalReference, UploadedDocument
-from .storage import get_literature_storage, store_literature
+from .models import CanonicalDocument, ExternalReference
+from .storage import store_literature
 
 
 class ZoteroImportError(Exception):
@@ -434,11 +435,10 @@ def _import_zotero_pdf(
     request_local_text=None,
     open_local_file=None,
 ):
-    if canonical.uploads.filter(status=UploadedDocument.Status.UPLOADED).exists():
-        already_uploaded = canonical.uploaders.filter(pk=uploader.pk).exists()
-        canonical.uploaders.add(uploader)
+    association = associate_existing_pdf(canonical, uploader)
+    if association:
         attachment["_pdf_source"] = "existing"
-        return "skipped" if already_uploaded else "reused"
+        return association
 
     base_url, library_path, _base_parts = _zotero_library_context(library_type, library_id, api_key)
     file_url = f"{base_url}{library_path}/items/{quote(attachment['item_key'], safe='')}/file"
@@ -457,83 +457,52 @@ def _import_zotero_pdf(
                     request_local_text=request_local_text,
                     open_local_file=open_local_file,
                 )
-                size, sha256 = _read_pdf_stream(local_stream, temporary)
+                prepared = _read_pdf_stream(local_stream, temporary, attachment["filename"])
                 source = "local"
             except Exception:
                 temporary.seek(0)
                 temporary.truncate()
                 local_stream = None
         if local_stream is None:
-            size, sha256 = _read_pdf_stream(request_file(file_url, api_key), temporary)
-        outcome = _store_prepared_pdf(
-            canonical, uploader, attachment["filename"], temporary, size, sha256, store_file
+            prepared = _read_pdf_stream(request_file(file_url, api_key), temporary, attachment["filename"])
+        document = save_pdf_upload(
+            canonical,
+            uploader,
+            prepared,
+            store_file=store_file,
+            reuse_existing_pdf=True,
         )
     attachment["_pdf_source"] = source
-    return outcome
+    return "imported" if document is not None else "reused"
 
 
 def _import_browser_pdf(canonical, uploader, uploaded_file, store_file=None):
-    filename = str(uploaded_file.name).replace("\\", "/").rsplit("/", 1)[-1][:500]
-    if not filename.lower().endswith(".pdf"):
-        raise ZoteroImportError("浏览器文件必须是 PDF。")
-    if canonical.uploads.filter(status=UploadedDocument.Status.UPLOADED).exists():
-        already_uploaded = canonical.uploaders.filter(pk=uploader.pk).exists()
-        canonical.uploaders.add(uploader)
-        return "skipped" if already_uploaded else "reused"
-    with tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024) as temporary:
-        size, sha256 = _read_pdf_stream(uploaded_file, temporary)
-        return _store_prepared_pdf(
-            canonical, uploader, filename, temporary, size, sha256, store_file or store_literature
-        )
+    prepared = prepare_pdf(uploaded_file)
+    association = associate_existing_pdf(canonical, uploader)
+    if association:
+        return association
+    document = save_pdf_upload(
+        canonical,
+        uploader,
+        prepared,
+        store_file=store_file or store_literature,
+        reuse_existing_pdf=True,
+    )
+    return "imported" if document is not None else "reused"
 
 
-def _store_prepared_pdf(canonical, uploader, filename, temporary, size, sha256, store_file):
-    if canonical.uploads.filter(sha256=sha256).exists():
-        return "reused"
-    temporary.seek(0)
-    uploaded_file = File(temporary, name=filename)
-    uploaded_file.content_type = "application/pdf"
-    stored = store_file(uploaded_file)
-    try:
-        with transaction.atomic():
-            duplicate_type = (
-                UploadedDocument.DuplicateType.EXACT
-                if UploadedDocument.objects.filter(sha256=sha256).exists()
-                else UploadedDocument.DuplicateType.NEW
-            )
-            UploadedDocument.objects.create(
-                canonical_document=canonical,
-                uploader=uploader,
-                original_name=filename,
-                remote_path=stored.remote_path,
-                storage_backend=stored.backend,
-                sha256=sha256,
-                size=size,
-                content_type="application/pdf",
-                duplicate_type=duplicate_type,
-            )
-    except Exception:
-        try:
-            get_literature_storage(stored.backend).delete(stored.remote_path)
-        except Exception:
-            pass
-        raise
-    return "imported"
-
-
-def _read_pdf_stream(stream, temporary):
-    digest = hashlib.sha256()
+def _read_pdf_stream(stream, temporary, filename):
     size = 0
     with stream:
         while chunk := stream.read(64 * 1024):
-            temporary.write(chunk)
-            digest.update(chunk)
             size += len(chunk)
+            if size > settings.MCP_MAX_UPLOAD_BYTES:
+                raise ZoteroImportError("PDF 文件超过上传大小上限。")
+            temporary.write(chunk)
     temporary.seek(0)
-    if b"%PDF-" not in temporary.read(1024):
-        raise ZoteroImportError("文件内容不是有效 PDF。")
-    temporary.seek(0)
-    return size, digest.hexdigest()
+    uploaded_file = File(temporary, name=filename)
+    uploaded_file.content_type = "application/pdf"
+    return prepare_pdf(uploaded_file)
 
 
 def _zotero_local_api_available():

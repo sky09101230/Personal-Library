@@ -50,9 +50,11 @@
           <a class="row-action" href="{% url 'admin:box_upload_canonicaldocument_change' literature.pk %}">编辑文献</a>
           {% endif %}
           </div>
-          <div class="file-meta">上传者：{% for uploader in literature.uploaders.all %}{{ uploader.username }}{% if not forloop.last %}、{% endif %}{% empty %}—{% endfor %}</div>
+          <div class="file-meta">关联用户：{% for uploader in literature.uploaders.all %}{{ uploader.username }}{% if not forloop.last %}、{% endif %}{% empty %}—{% endfor %}</div>
+          {% if is_my_uploads %}<div class="file-meta">{% if literature.has_own_upload %}关系：你实际上传过 PDF{% else %}关系：通过 DOI 或 Zotero 关联，未重复保存 PDF{% endif %}</div>{% endif %}
           {% for upload in literature.uploads.all %}
           <div class="attachment-item">
+            <div class="file-meta">{{ upload.original_name }} · PDF 提交者：{{ upload.uploader.username }}</div>
             <div class="row-actions">
               <a class="row-action primary-action" href="{% url 'view-document' upload.pk %}" target="_blank" rel="noopener">在线打开</a>
               <a class="row-action" href="{% url 'download-document' upload.pk %}">下载</a>
