@@ -324,6 +324,7 @@ class CandidateViewTests(TestCase):
 
         response = self.client.get("/skills/candidates/")
 
+        self.assertContains(response, 'class="content content-wide"')
         self.assertContains(response, "全选当前页")
         self.assertContains(response, 'value="%s"' % self.own.pk)
         self.assertContains(response, 'querySelectorAll(\'input[name="candidate_ids"]\')')
