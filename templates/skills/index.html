@@ -2,10 +2,10 @@
 {% block title %}Skills | PLAB{% endblock %}
 {% block content %}
 <div class="page-head"><p class="eyebrow">PLAB Shared Skills</p><h1>Skills 广场</h1><p class="subtle">按科研用途查找已同步的技能。</p></div>
-<nav class="skills-subnav" aria-label="Skills 导航"><a class="active" href="{% url 'skills-index' %}">全部 Skills</a><a href="{% url 'skills-featured' %}">管理员精选</a></nav>
+<nav class="skills-subnav" aria-label="Skills 导航"><a class="active" href="{% url 'skills-index' %}">全部 Skills</a><a href="{% url 'skills-featured' %}">管理员精选</a><a href="{% url 'skills-submit-candidate' %}">投稿 Skill</a><a href="{% url 'skills-candidates' %}">{% if request.user.is_staff %}候选审核{% else %}我的投稿{% endif %}</a></nav>
 {% if messages %}{% for message in messages %}<div class="notice{% if message.tags == 'error' %} error{% endif %}">{{ message }}</div>{% endfor %}{% endif %}
 <form method="get" class="library-search" role="search"><label for="skill-search">搜索 Skill</label><div class="library-search-controls"><input id="skill-search" type="search" name="q" value="{{ query }}" placeholder="名称、描述或 slug"><button class="primary" type="submit">搜索</button>{% if query %}<a href="{% url 'skills-index' %}">清除</a>{% endif %}</div></form>
-{% if request.user.is_staff %}<div class="skills-admin-actions"><a href="/admin/skills/skillpurpose/">管理用途分类</a><a href="/admin/skills/sharedskill/">校正 Skill 用途</a></div><form id="skills-sync-form" class="skills-sync-form" method="post" action="{% url 'skills-sync' %}">{% csrf_token %}<label for="skills-sync-source">GitHub 仓库</label><select id="skills-sync-source" name="source_id"><option value="">全部已启用仓库</option>{% for source in sync_sources %}<option value="{{ source.pk }}">{{ source.name }}</option>{% endfor %}</select><button id="skills-sync-button" class="primary" type="submit">从 GitHub 同步</button><button id="skills-enrich-button" class="primary" type="submit" formaction="{% url 'skills-enrich' %}">重新生成摘要和分类</button></form><div id="sync-progress" class="sync-progress"{% if not active_job %} hidden{% endif %} data-status-url-template="{% url 'skills-sync-status' 0 %}" data-job-id="{{ active_job.pk|default:'' }}" data-operation="{{ active_job.operation|default:'sync' }}" aria-live="polite"><div class="sync-progress-head"><strong id="sync-progress-title">任务准备中</strong><span id="sync-progress-percent">0%</span></div><div class="progress-track"><div id="sync-progress-bar" class="progress-bar indeterminate"></div></div><p id="sync-progress-detail" class="subtle">正在排队...</p><p id="sync-progress-count" class="sync-progress-count"></p></div>{% endif %}
+{% if request.user.is_staff %}<div class="skills-admin-actions"><a href="{% url 'skills-candidates' %}">审核候选</a><a href="/admin/skills/skillpurpose/">管理用途分类</a><a href="/admin/skills/sharedskill/">校正正式 Skill</a></div><form id="skills-sync-form" class="skills-sync-form" method="post" action="{% url 'skills-sync' %}">{% csrf_token %}<label for="skills-sync-source">GitHub 仓库</label><select id="skills-sync-source" name="source_id"><option value="">全部已启用仓库</option>{% for source in sync_sources %}<option value="{{ source.pk }}">{{ source.name }}</option>{% endfor %}</select><button id="skills-sync-button" class="primary" type="submit">扫描到候选池</button><button id="skills-enrich-button" class="primary" type="submit" formaction="{% url 'skills-enrich' %}">重新生成正式 Skill 摘要</button></form><div id="sync-progress" class="sync-progress"{% if not active_job %} hidden{% endif %} data-status-url-template="{% url 'skills-sync-status' 0 %}" data-job-id="{{ active_job.pk|default:'' }}" data-operation="{{ active_job.operation|default:'scan' }}" aria-live="polite"><div class="sync-progress-head"><strong id="sync-progress-title">任务准备中</strong><span id="sync-progress-percent">0%</span></div><div class="progress-track"><div id="sync-progress-bar" class="progress-bar indeterminate"></div></div><p id="sync-progress-detail" class="subtle">正在排队...</p><p id="sync-progress-count" class="sync-progress-count"></p></div>{% endif %}
 {% if purposes or uncategorized_page.paginator.count %}<div class="purpose-tabs" role="tablist" aria-label="大用途">{% for purpose in purposes %}<button class="purpose-tab{% if purpose.is_active %} active{% endif %}" type="button" role="tab" data-purpose-target="purpose-{{ purpose.slug }}">{{ purpose.name }}</button>{% endfor %}{% if uncategorized_page.paginator.count %}<button class="purpose-tab{% if uncategorized_is_active %} active{% endif %}" type="button" role="tab" data-purpose-target="purpose-uncategorized">未分类</button>{% endif %}</div>{% for purpose in purposes %}<section id="purpose-{{ purpose.slug }}" class="purpose-panel{% if not purpose.is_active %} hidden{% endif %}" role="tabpanel">{% if purpose.purpose_tabs %}<div class="subpurpose-tabs" role="tablist" aria-label="{{ purpose.name }}的小用途">{% for subpurpose in purpose.purpose_tabs %}<button class="subpurpose-tab{% if subpurpose.is_active %} active{% endif %}" type="button" role="tab" data-subpurpose-target="subpurpose-{{ subpurpose.slug }}">{{ subpurpose.name }}</button>{% endfor %}</div>{% for subpurpose in purpose.purpose_tabs %}<div id="subpurpose-{{ subpurpose.slug }}" class="subpurpose-panel{% if not subpurpose.is_active %} hidden{% endif %}" role="tabpanel"><div class="skill-card-grid">{% for skill in subpurpose.page.object_list %}{% include "skills/_skill_card.html" with skill=skill %}{% empty %}<p class="subtle">该小用途暂时没有匹配的 Skill。</p>{% endfor %}</div>{% if subpurpose.page.has_other_pages %}<nav class="pager"><span>第 {{ subpurpose.page.number }} / {{ subpurpose.page.paginator.num_pages }} 页</span><span class="pager-nav">{% if subpurpose.page.has_previous %}<a href="?q={{ query|urlencode }}&category={{ purpose.slug }}&purpose={{ subpurpose.slug }}&page={{ subpurpose.page.previous_page_number }}">上一页</a>{% endif %}{% if subpurpose.page.has_next %}<a href="?q={{ query|urlencode }}&category={{ purpose.slug }}&purpose={{ subpurpose.slug }}&page={{ subpurpose.page.next_page_number }}">下一页</a>{% endif %}</span></nav>{% endif %}</div>{% endfor %}{% else %}<div class="skill-card-grid">{% for skill in purpose.page.object_list %}{% include "skills/_skill_card.html" with skill=skill %}{% empty %}<p class="subtle">该用途暂时没有匹配的 Skill。</p>{% endfor %}</div>{% if purpose.page.has_other_pages %}<nav class="pager"><span>第 {{ purpose.page.number }} / {{ purpose.page.paginator.num_pages }} 页</span><span class="pager-nav">{% if purpose.page.has_previous %}<a href="?q={{ query|urlencode }}&category={{ purpose.slug }}&page={{ purpose.page.previous_page_number }}">上一页</a>{% endif %}{% if purpose.page.has_next %}<a href="?q={{ query|urlencode }}&category={{ purpose.slug }}&page={{ purpose.page.next_page_number }}">下一页</a>{% endif %}</span></nav>{% endif %}{% endif %}</section>{% endfor %}{% if uncategorized_page.paginator.count %}<section id="purpose-uncategorized" class="purpose-panel{% if not uncategorized_is_active %} hidden{% endif %}" role="tabpanel"><p class="subtle">这些 Skill 尚未完成 DeepSeek 自动分类，或没有合适的现有用途；管理员只需在这里校正例外。</p><div class="skill-card-grid">{% for skill in uncategorized_page.object_list %}{% include "skills/_skill_card.html" with skill=skill %}{% endfor %}</div>{% if uncategorized_page.has_other_pages %}<nav class="pager"><span>第 {{ uncategorized_page.number }} / {{ uncategorized_page.paginator.num_pages }} 页</span><span class="pager-nav">{% if uncategorized_page.has_previous %}<a href="?q={{ query|urlencode }}&category=uncategorized&page={{ uncategorized_page.previous_page_number }}">上一页</a>{% endif %}{% if uncategorized_page.has_next %}<a href="?q={{ query|urlencode }}&category=uncategorized&page={{ uncategorized_page.next_page_number }}">下一页</a>{% endif %}</span></nav>{% endif %}</section>{% endif %}{% else %}<div class="panel"><p class="subtle">没有匹配的 Skill。{% if request.user.is_staff %}请先管理用途分类，再同步 GitHub Skill。{% endif %}</p></div>{% endif %}
 {% if request.user.is_staff %}<script>
 (() => {
@@ -33,7 +33,7 @@
     bar.classList.toggle("indeterminate", !determinate);
     if (determinate) bar.style.width = `${data.percent}%`;
     setText("sync-progress-percent", determinate ? `${data.percent}%` : "准备中");
-    const taskName = isEnrichment ? "摘要与分类" : "GitHub 同步";
+    const taskName = isEnrichment ? "正式 Skill 摘要" : "GitHub 候选扫描";
     if (data.status === "queued") setText("sync-progress-title", `${taskName}任务排队中`);
     if (data.status === "running") setText("sync-progress-title", `正在执行${taskName}`);
     if (data.status === "completed") setText("sync-progress-title", data.error ? `${taskName}完成，但有来源失败` : `${taskName}完成`);
@@ -41,7 +41,7 @@
     const source = data.current_source ? `来源：${data.current_source}` : "";
     const skill = data.current_skill ? ` · 当前 Skill：${data.current_skill}` : "";
     setText("sync-progress-detail", data.error || `${source}${skill}` || "正在准备...");
-    const actionCount = isEnrichment ? `已更新 ${data.enriched_count}` : `已上传 ${data.uploaded_count}`;
+    const actionCount = isEnrichment ? `已更新 ${data.enriched_count}` : `已刷新候选 ${data.uploaded_count}`;
     setText("sync-progress-count", `已完成来源 ${data.sources_completed}/${data.sources_total || "?"} · 已处理 Skill ${data.skills_processed}/${data.skills_total || "?"} · ${actionCount} · 已跳过 ${data.skipped_count} · 失败来源 ${data.failed_sources}`);
     if (["completed", "failed"].includes(data.status)) {
       buttons.forEach((item) => { item.disabled = false; });
@@ -50,7 +50,7 @@
       if (data.status === "completed" && !data.error) setTimeout(() => window.location.reload(), 1200);
     }
   };
-  const startPolling = () => { poll().catch(() => setText("sync-progress-detail", "暂时无法读取同步状态，请刷新页面重试。")); timer = setInterval(() => poll().catch(() => {}), 1000); };
+  const startPolling = () => { poll().catch(() => setText("sync-progress-detail", "暂时无法读取任务状态，请刷新页面重试。")); timer = setInterval(() => poll().catch(() => {}), 1000); };
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const sourceName = sourceSelect.options[sourceSelect.selectedIndex].textContent;
@@ -58,13 +58,13 @@
     const isEnrichment = submitter === enrichButton;
     const confirmation = isEnrichment
       ? `将把“${sourceName}”的 SKILL.md 发送给 DeepSeek，并且只更新数据库中的摘要和分类，不访问文件存储。继续吗？`
-      : `将从“${sourceName}”同步 Skill 发布包到文件存储。继续吗？`;
+      : `将扫描“${sourceName}”并更新私有候选池，不会直接发布。继续吗？`;
     if (!confirm(confirmation)) return;
     const body = new FormData(form);
     buttons.forEach((item) => { item.disabled = true; });
     sourceSelect.disabled = true;
     progress.hidden = false;
-    setText("sync-progress-title", isEnrichment ? "正在启动摘要与分类" : "正在启动同步");
+    setText("sync-progress-title", isEnrichment ? "正在启动正式 Skill 摘要" : "正在启动候选扫描");
     setText("sync-progress-detail", "任务已提交，等待后台进程开始...");
     const response = await fetch(submitter.formAction || form.action, {method: "POST", headers: {"Accept": "application/json", "X-CSRFToken": csrfToken}, body});
     const data = await response.json();

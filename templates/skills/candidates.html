@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{% if request.user.is_staff %}Skill 候选审核{% else %}我的 Skill 投稿{% endif %} | PLAB{% endblock %}
+{% block content %}
+<div class="page-head"><p class="eyebrow">Skill 候选池</p><h1>{% if request.user.is_staff %}候选审核{% else %}我的投稿{% endif %}</h1><p class="subtle">候选内容与正式库隔离，只有管理员批准后才会发布。</p></div>
+{% if messages %}{% for message in messages %}<div class="notice{% if message.tags == 'error' %} error{% endif %}">{{ message }}</div>{% endfor %}{% endif %}
+<div class="library-toolbar">
+  <form method="get" class="library-search"><div class="library-search-controls">
+    <select name="status" aria-label="状态"><option value="">全部状态</option>{% for value,label in status_choices %}<option value="{{ value }}"{% if selected_status == value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+    {% if request.user.is_staff %}<select name="source" aria-label="GitHub 来源"><option value="">全部来源</option>{% for source in sources %}<option value="{{ source.pk }}"{% if selected_source == source.pk|stringformat:'s' %} selected{% endif %}>{{ source.name }}</option>{% endfor %}</select>{% endif %}
+    <button class="primary" type="submit">筛选</button>
+  </div></form>
+  <a href="{% url 'skills-submit-candidate' %}">投稿 ZIP</a>
+</div>
+<form method="post" action="{% url 'skills-candidates-batch-publish' %}">{% csrf_token %}
+<div class="table-wrap"><table><thead><tr>{% if request.user.is_staff %}<th>选择</th>{% endif %}<th>Skill</th><th>来源</th><th>分类</th><th>状态</th><th>更新时间</th><th></th></tr></thead><tbody>
+{% for candidate in page.object_list %}<tr>
+  {% if request.user.is_staff %}<td>{% if candidate.status == 'pending' and candidate.purpose_id and candidate.description and not candidate.validation_errors %}<input type="checkbox" name="candidate_ids" value="{{ candidate.pk }}" aria-label="选择 {{ candidate.name }}">{% else %}—{% endif %}</td>{% endif %}
+  <td><strong>{{ candidate.name }}</strong><div class="file-meta">{{ candidate.description|truncatechars:120|default:"等待摘要" }}</div></td>
+  <td>{% if candidate.origin == 'github' %}{{ candidate.source.name }}<div class="file-meta">{{ candidate.source_path }}</div>{% else %}ZIP 投稿{% if request.user.is_staff %}<div class="file-meta">{{ candidate.submitted_by.username }}</div>{% endif %}{% endif %}</td>
+  <td>{{ candidate.purpose|default:"待分类" }}</td>
+  <td><span class="tag">{% if candidate.status == 'pending' %}待审核{% elif candidate.status == 'published' %}已发布{% else %}已拒绝{% endif %}</span>{% if candidate.validation_warnings %}<div class="file-meta">有 {{ candidate.validation_warnings|length }} 条提醒</div>{% endif %}</td>
+  <td>{{ candidate.updated_at|date:"Y-m-d H:i" }}</td>
+  <td><a href="{% url 'skills-candidate-detail' candidate.pk %}">{% if request.user.is_staff %}审核{% else %}详情{% endif %}</a></td>
+</tr>{% empty %}<tr><td colspan="{% if request.user.is_staff %}7{% else %}6{% endif %}">暂无候选。</td></tr>{% endfor %}
+</tbody></table></div>
+{% if request.user.is_staff %}<p><button class="primary" type="submit">发布选中候选</button></p>{% endif %}
+</form>
+{% if page.has_other_pages %}<nav class="pager"><span>第 {{ page.number }} / {{ page.paginator.num_pages }} 页</span><span class="pager-nav">{% if page.has_previous %}<a href="?page={{ page.previous_page_number }}">上一页</a>{% endif %}{% if page.has_next %}<a href="?page={{ page.next_page_number }}">下一页</a>{% endif %}</span></nav>{% endif %}
+{% endblock %}

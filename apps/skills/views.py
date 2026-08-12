@@ -6,16 +6,17 @@ from django.db.models import Prefetch, Q
 from django.http import Http404, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.http import content_disposition_header
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_POST
 
 from apps.box_upload.services import LiteratureStorageError
 from apps.box_upload.storage import NAS_WEBDAV
 
 from .downloads import load_skill_download_token
-from .forms import SkillDescriptionForm
-from .models import FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillPurpose
+from .candidate_services import CandidatePublishError, CandidateValidationError, create_uploaded_candidate, publish_candidate, reject_candidate
+from .forms import SkillCandidateReviewForm, SkillCandidateUploadForm, SkillDescriptionForm
+from .models import FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillCandidate, SkillPurpose
 from .storage import open_skill_stream
-from .tasks import launch_enrichment_job, launch_sync_job
+from .tasks import launch_enrichment_job, launch_scan_job
 from .models import SkillSyncJob
 
 
@@ -79,6 +80,116 @@ def index(request):
 def featured(request):
     entries = FeaturedSkill.objects.select_related("skill", "skill__purpose", "skill__source").prefetch_related("skill__releases")
     return render(request, "skills/featured.html", {"entries": entries})
+
+
+@login_required
+def submit_candidate(request):
+    form = SkillCandidateUploadForm(request.POST or None, request.FILES or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            candidate, created = create_uploaded_candidate(form.cleaned_data["archive"], request.user)
+        except CandidateValidationError as exc:
+            form.add_error("archive", str(exc))
+        else:
+            if created:
+                messages.success(request, "Skill 已进入候选池，管理员批准前不会出现在正式库中。")
+            else:
+                messages.info(request, "相同内容已经投稿，本次未重复保存。")
+            return redirect("skills-candidate-detail", candidate_id=candidate.pk)
+    return render(request, "skills/submit_candidate.html", {"form": form})
+
+
+@login_required
+def candidates(request):
+    queryset = SkillCandidate.objects.select_related("source", "submitted_by", "purpose", "purpose__parent")
+    if not request.user.is_staff:
+        queryset = queryset.filter(origin=SkillCandidate.Origin.UPLOAD, submitted_by=request.user)
+    status = request.GET.get("status", "").strip()
+    source_id = request.GET.get("source", "").strip()
+    if status in SkillCandidate.Status.values:
+        queryset = queryset.filter(status=status)
+    if request.user.is_staff and source_id.isdecimal():
+        queryset = queryset.filter(source_id=int(source_id))
+    page = Paginator(queryset, 30).get_page(request.GET.get("page"))
+    return render(request, "skills/candidates.html", {
+        "page": page,
+        "selected_status": status,
+        "selected_source": source_id,
+        "status_choices": SkillCandidate.Status.choices,
+        "sources": GitHubSkillSource.objects.filter(is_enabled=True),
+    })
+
+
+@login_required
+def candidate_detail(request, candidate_id):
+    queryset = SkillCandidate.objects.select_related("source", "submitted_by", "purpose", "purpose__parent", "published_skill")
+    if not request.user.is_staff:
+        queryset = queryset.filter(origin=SkillCandidate.Origin.UPLOAD, submitted_by=request.user)
+    candidate = get_object_or_404(queryset, pk=candidate_id)
+    form = SkillCandidateReviewForm(initial={
+        "description": candidate.description,
+        "purpose": candidate.purpose_id,
+        "rejection_reason": candidate.rejection_reason,
+    }) if request.user.is_staff else None
+    return render(request, "skills/candidate_detail.html", {"candidate": candidate, "form": form})
+
+
+@login_required
+@user_passes_test(lambda user: user.is_staff)
+@require_POST
+def review_candidate(request, candidate_id):
+    candidate = get_object_or_404(SkillCandidate, pk=candidate_id)
+    form = SkillCandidateReviewForm(request.POST)
+    action = request.POST.get("action")
+    if action == "reject":
+        reason = request.POST.get("rejection_reason", "").strip()
+        if not reason:
+            form.add_error("rejection_reason", "拒绝时必须填写原因。")
+            return render(request, "skills/candidate_detail.html", {"candidate": candidate, "form": form}, status=400)
+        try:
+            reject_candidate(candidate, request.user, reason)
+        except CandidatePublishError as exc:
+            messages.error(request, str(exc))
+            return redirect("skills-candidate-detail", candidate_id=candidate.pk)
+        messages.success(request, f"已拒绝 {candidate.name}。")
+        return redirect("skills-candidates")
+    if not form.is_valid():
+        return render(request, "skills/candidate_detail.html", {"candidate": candidate, "form": form}, status=400)
+    candidate.description = form.cleaned_data["description"]
+    candidate.purpose = form.cleaned_data["purpose"]
+    candidate.purpose_is_manual = True
+    candidate.save(update_fields=["description", "purpose", "purpose_is_manual", "updated_at"])
+    try:
+        if action == "publish":
+            publish_candidate(candidate, request.user)
+            messages.success(request, f"已发布 {candidate.name}。")
+        else:
+            raise CandidatePublishError("未知审核操作。")
+    except CandidatePublishError as exc:
+        messages.error(request, str(exc))
+        return redirect("skills-candidate-detail", candidate_id=candidate.pk)
+    return redirect("skills-candidates")
+
+
+@login_required
+@user_passes_test(lambda user: user.is_staff)
+@require_POST
+def batch_publish_candidates(request):
+    candidate_ids = [int(value) for value in request.POST.getlist("candidate_ids") if value.isdecimal()]
+    published = 0
+    failures = []
+    for candidate in SkillCandidate.objects.filter(pk__in=candidate_ids, status=SkillCandidate.Status.PENDING):
+        try:
+            publish_candidate(candidate, request.user)
+        except CandidatePublishError as exc:
+            failures.append(f"{candidate.name}: {exc}")
+        else:
+            published += 1
+    if published:
+        messages.success(request, f"已发布 {published} 个候选。")
+    if failures:
+        messages.error(request, "；".join(failures))
+    return redirect("skills-candidates")
 
 
 @login_required
@@ -170,16 +281,16 @@ def sync(request):
         return error_response
     job = SkillSyncJob.objects.filter(status__in=[SkillSyncJob.QUEUED, SkillSyncJob.RUNNING]).first()
     if job is None:
-        job = SkillSyncJob.objects.create(requested_by=request.user, operation=SkillSyncJob.SYNC)
+        job = SkillSyncJob.objects.create(requested_by=request.user, operation=SkillSyncJob.SCAN)
         try:
-            launch_sync_job(job.pk, source_id=selected_source.pk if selected_source else None)
+            launch_scan_job(job.pk, source_id=selected_source.pk if selected_source else None)
         except OSError as exc:
             job.status = SkillSyncJob.FAILED
-            job.error = f"无法启动同步任务: {exc}"
+            job.error = f"无法启动候选扫描任务: {exc}"
             job.save(update_fields=["status", "error"])
     if request.headers.get("Accept") == "application/json":
         return JsonResponse({"job_id": job.pk, "status": job.status, "operation": job.operation}, status=202)
-    messages.info(request, "同步任务已开始，请在页面上查看进度。")
+    messages.info(request, "候选扫描已开始；扫描结果不会直接发布。")
     return redirect("skills-index")
 
 

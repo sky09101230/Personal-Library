@@ -82,13 +82,13 @@ class SkillsPageTests(TestCase):
         self.assertContains(response, "/skills/plab-shared-skills/literature-filter/")
 
     def test_top_level_leaf_purpose_displays_assigned_skills(self):
-        leaf_purpose = SkillPurpose.objects.create(name="Literature Search", slug="literature-search")
+        leaf_purpose = SkillPurpose.objects.create(name="Standalone Literature Search", slug="standalone-literature-search")
         self.skill.purpose = leaf_purpose
         self.skill.save(update_fields=["purpose", "updated_at"])
 
-        response = self.client.get("/skills/?category=literature-search")
+        response = self.client.get("/skills/?category=standalone-literature-search")
 
-        self.assertContains(response, "Literature Search")
+        self.assertContains(response, "Standalone Literature Search")
         self.assertContains(response, "/skills/plab-shared-skills/pdf2md/")
 
     def test_featured_page_shows_admin_recommendation_only(self):
@@ -237,7 +237,7 @@ class SkillSyncTests(TestCase):
             slug="research-skills",
             repository_url="https://github.com/example/research-skills.git",
         )
-        purpose = SkillPurpose.objects.create(name="Literature Read", slug="literature-read")
+        purpose = SkillPurpose.objects.create(name="Test Literature Read", slug="test-literature-read")
         commit = "b" * 40
         skill = SharedSkill.objects.create(
             source=source,
@@ -371,14 +371,14 @@ class SkillSyncTests(TestCase):
 class SkillEnrichmentTests(TestCase):
     @patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key", "DEEPSEEK_MODEL": "deepseek-v4-flash"}, clear=False)
     def test_deepseek_reads_document_and_returns_two_sentence_summary(self):
-        purpose = SkillPurpose.objects.create(name="Literature Read", slug="literature-read")
+        purpose = SkillPurpose.objects.create(name="Test Literature Read", slug="test-literature-read")
         calls = []
 
         def request_func(url, body, api_key, timeout):
             calls.append((url, body, api_key, timeout))
             payload = {
                 "summary": "该技能把论文内容整理为带证据的结构化文献卡片。适合需要沉淀可靠研究事实和可复用洞见时使用。",
-                "purpose_slug": "literature-read",
+                "purpose_slug": "test-literature-read",
             }
             return {
                 "model": "deepseek-v4-flash",
@@ -394,7 +394,7 @@ class SkillEnrichmentTests(TestCase):
 
         request_payload = json.loads(calls[0][1]["messages"][1]["content"])
         self.assertEqual(request_payload["document"], "# Complete Skill document")
-        self.assertEqual(result["purpose_slug"], "literature-read")
+        self.assertEqual(result["purpose_slug"], "test-literature-read")
         self.assertEqual(result["summary"].count("。"), 2)
 
     @patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-key"}, clear=False)
@@ -455,7 +455,7 @@ class SkillSyncJobViewTests(TestCase):
     def test_staff_index_shows_independent_enrichment_action(self):
         response = self.client.get("/skills/")
 
-        self.assertContains(response, "重新生成摘要和分类")
+        self.assertContains(response, "重新生成正式 Skill 摘要")
 
     def test_staff_can_edit_generated_description(self):
         source = GitHubSkillSource.objects.create(
@@ -493,8 +493,8 @@ class SkillSyncJobViewTests(TestCase):
         self.assertTrue(skill.description_is_manual)
         self.assertEqual(skill.ai_generated_description, "DeepSeek 生成的展示描述。")
 
-    @patch("apps.skills.views.launch_sync_job")
-    def test_sync_starts_background_job_and_returns_immediately(self, launch_sync_job):
+    @patch("apps.skills.views.launch_scan_job")
+    def test_sync_starts_background_job_and_returns_immediately(self, launch_scan_job):
         response = self.client.post("/skills/sync/", HTTP_ACCEPT="application/json")
 
         self.assertEqual(response.status_code, 202)
@@ -502,9 +502,9 @@ class SkillSyncJobViewTests(TestCase):
         self.assertEqual(response.json(), {
             "job_id": job.pk,
             "status": SkillSyncJob.QUEUED,
-            "operation": SkillSyncJob.SYNC,
+            "operation": SkillSyncJob.SCAN,
         })
-        launch_sync_job.assert_called_once_with(job.pk, source_id=None)
+        launch_scan_job.assert_called_once_with(job.pk, source_id=None)
 
     @patch("apps.skills.views.launch_enrichment_job")
     def test_enrichment_starts_independent_background_job(self, launch_job):
@@ -525,8 +525,8 @@ class SkillSyncJobViewTests(TestCase):
         self.assertEqual(job.operation, SkillSyncJob.ENRICHMENT)
         launch_job.assert_called_once_with(job.pk, source_id=source.pk)
 
-    @patch("apps.skills.views.launch_sync_job")
-    def test_sync_passes_selected_source_to_background_job(self, launch_sync_job):
+    @patch("apps.skills.views.launch_scan_job")
+    def test_sync_passes_selected_source_to_background_job(self, launch_scan_job):
         source = GitHubSkillSource.objects.create(
             name="Selected source",
             slug="selected-source",
@@ -541,10 +541,10 @@ class SkillSyncJobViewTests(TestCase):
 
         self.assertEqual(response.status_code, 202)
         job = SkillSyncJob.objects.get()
-        launch_sync_job.assert_called_once_with(job.pk, source_id=source.pk)
+        launch_scan_job.assert_called_once_with(job.pk, source_id=source.pk)
 
-    @patch("apps.skills.views.launch_sync_job")
-    def test_sync_rejects_disabled_source(self, launch_sync_job):
+    @patch("apps.skills.views.launch_scan_job")
+    def test_sync_rejects_disabled_source(self, launch_scan_job):
         source = GitHubSkillSource.objects.create(
             name="Disabled source",
             slug="disabled-source",
@@ -560,7 +560,7 @@ class SkillSyncJobViewTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertFalse(SkillSyncJob.objects.exists())
-        launch_sync_job.assert_not_called()
+        launch_scan_job.assert_not_called()
 
     def test_sync_status_returns_current_progress(self):
         job = SkillSyncJob.objects.create(

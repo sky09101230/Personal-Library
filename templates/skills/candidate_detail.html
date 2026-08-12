@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}{{ candidate.name }} | Skill 候选{% endblock %}
+{% block content %}
+<div class="page-head"><p class="eyebrow">Skill 候选</p><h1>{{ candidate.name }}</h1><p class="subtle">{% if candidate.origin == 'github' %}{{ candidate.source.name }} · {{ candidate.source_path }} · {{ candidate.source_commit|slice:":12" }}{% else %}{{ candidate.original_name }} · 投稿者 {{ candidate.submitted_by.username }}{% endif %}</p></div>
+{% if messages %}{% for message in messages %}<div class="notice{% if message.tags == 'error' %} error{% endif %}">{{ message }}</div>{% endfor %}{% endif %}
+<div class="panel">
+  <p><strong>状态：</strong>{% if candidate.status == 'pending' %}待审核{% elif candidate.status == 'published' %}已发布{% else %}已拒绝{% endif %}</p>
+  <p><strong>摘要：</strong>{{ candidate.description|default:"等待自动摘要或人工补全" }}</p>
+  <p><strong>建议分类：</strong>{{ candidate.purpose|default:"待分类" }}{% if candidate.purpose_is_manual %}（人工确认）{% endif %}</p>
+  {% if candidate.validation_errors %}<div class="notice error"><strong>校验错误</strong><ul>{% for item in candidate.validation_errors %}<li>{{ item }}</li>{% endfor %}</ul></div>{% endif %}
+  {% if candidate.validation_warnings %}<div class="notice"><strong>提醒</strong><ul>{% for item in candidate.validation_warnings %}<li>{{ item }}</li>{% endfor %}</ul></div>{% endif %}
+  {% if candidate.rejection_reason %}<p><strong>拒绝原因：</strong>{{ candidate.rejection_reason }}</p>{% endif %}
+  {% if candidate.published_skill %}<p><a href="{% if candidate.published_skill.source %}{% url 'skills-source-detail' candidate.published_skill.source.slug candidate.published_skill.slug %}{% else %}{% url 'skills-detail' candidate.published_skill.slug %}{% endif %}">查看正式 Skill</a></p>{% endif %}
+</div>
+{% if request.user.is_staff and candidate.status == 'pending' %}<div class="panel"><h2>管理员审核</h2><form method="post" action="{% url 'skills-candidate-review' candidate.pk %}">{% csrf_token %}{{ form.as_p }}<div class="row-actions"><button class="primary" type="submit" name="action" value="publish">批准并发布</button><button class="danger-action" type="submit" name="action" value="reject">拒绝</button></div></form></div>{% endif %}
+{% endblock %}

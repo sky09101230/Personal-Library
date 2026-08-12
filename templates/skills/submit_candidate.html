@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}投稿 Skill | PLAB{% endblock %}
+{% block content %}
+<div class="page-head"><p class="eyebrow">Skill 投稿</p><h1>上传一个 Skill ZIP</h1><p class="subtle">不需要 GitHub。系统会检查格式、生成摘要并建议分类，管理员批准前不会进入正式库。</p></div>
+{% if messages %}{% for message in messages %}<div class="notice{% if message.tags == 'error' %} error{% endif %}">{{ message }}</div>{% endfor %}{% endif %}
+<div class="split-layout">
+  <div class="panel">
+    <form method="post" enctype="multipart/form-data">{% csrf_token %}{{ form.as_p }}<button class="primary" type="submit">检查并提交</button></form>
+  </div>
+  <aside class="side-note"><strong>一包一个 Skill</strong><p>ZIP 中必须且只能有一个 <code>SKILL.md</code>，外面多一层文件夹没有关系。</p><p>不要包含论文、实验数据、数据库、向量索引、模型权重、密钥或账号配置。</p><p><a href="{% url 'skills-candidates' %}">查看我的投稿</a></p></aside>
+</div>
+{% endblock %}

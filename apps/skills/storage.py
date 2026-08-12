@@ -10,6 +10,15 @@ def get_nas_skill_storage():
     )
 
 
+def get_nas_skill_candidate_storage():
+    return NasWebDavLiteratureStorage(
+        root=os.environ.get(
+            "NAS_WEBDAV_SKILL_CANDIDATES_ROOT",
+            "/public/PLAB_KnowledgeBase/SkillCandidates",
+        )
+    )
+
+
 def open_skill_stream(release):
     if release.storage_backend == NAS_WEBDAV:
         return get_nas_skill_storage().open_stream(release.archive_remote_path)

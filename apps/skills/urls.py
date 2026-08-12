@@ -6,6 +6,11 @@ from . import views
 urlpatterns = [
     path("", views.index, name="skills-index"),
     path("featured/", views.featured, name="skills-featured"),
+    path("submit/", views.submit_candidate, name="skills-submit-candidate"),
+    path("candidates/", views.candidates, name="skills-candidates"),
+    path("candidates/publish/", views.batch_publish_candidates, name="skills-candidates-batch-publish"),
+    path("candidates/<int:candidate_id>/", views.candidate_detail, name="skills-candidate-detail"),
+    path("candidates/<int:candidate_id>/review/", views.review_candidate, name="skills-candidate-review"),
     path("sync/", views.sync, name="skills-sync"),
     path("enrich/", views.enrich, name="skills-enrich"),
     path("sync/<int:job_id>/status/", views.sync_status, name="skills-sync-status"),

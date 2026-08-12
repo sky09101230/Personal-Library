@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillPurpose, SkillSyncJob
+from .models import FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillCandidate, SkillPurpose, SkillSyncJob
 
 
 @admin.register(SkillSyncJob)
@@ -52,3 +52,27 @@ class SharedSkillReleaseAdmin(admin.ModelAdmin):
     list_display = ("skill", "git_commit", "storage_backend", "repository_id", "archive_name", "synced_at")
     list_filter = ("storage_backend",)
     search_fields = ("skill__name", "git_commit", "archive_name")
+
+
+@admin.register(SkillCandidate)
+class SkillCandidateAdmin(admin.ModelAdmin):
+    list_display = ("name", "origin", "status", "purpose", "source", "submitted_by", "updated_at")
+    list_filter = ("origin", "status", "purpose", "source")
+    search_fields = ("name", "slug", "description", "source_path", "submitted_by__username")
+    readonly_fields = (
+        "content_sha256",
+        "archive_remote_path",
+        "archive_size",
+        "validation_errors",
+        "validation_warnings",
+        "published_skill",
+        "reviewed_by",
+        "reviewed_at",
+        "created_at",
+        "updated_at",
+    )
+
+    def save_model(self, request, obj, form, change):
+        if "purpose" in form.changed_data:
+            obj.purpose_is_manual = True
+        super().save_model(request, obj, form, change)

@@ -294,17 +294,32 @@ def _read_metadata(content):
     if len(parts) < 3:
         return {}
     metadata = {}
-    for line in parts[1].splitlines():
+    lines = parts[1].splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
         if ":" not in line:
+            index += 1
             continue
         key, value = line.split(":", 1)
-        if key.strip() in {"name", "description"}:
-            metadata[key.strip()] = value.strip().strip('"').strip("'")
+        key = key.strip()
+        value = value.strip()
+        if key in {"name", "description"}:
+            if value in {"|", ">", "|-", ">-", "|+", ">+"}:
+                block = []
+                index += 1
+                while index < len(lines) and (not lines[index].strip() or lines[index][:1].isspace()):
+                    block.append(lines[index].strip())
+                    index += 1
+                metadata[key] = ("\n" if value.startswith("|") else " ").join(block).strip()
+                continue
+            metadata[key] = value.strip('"').strip("'")
+        index += 1
     return metadata
 
 
 def _archive_directory(source_directory, archive_path):
     with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
         for path in source_directory.rglob("*"):
-            if path.is_file() and "__pycache__" not in path.parts:
+            if path.is_file() and "__pycache__" not in path.parts and ".git" not in path.parts:
                 archive.write(path, path.relative_to(source_directory.parent))

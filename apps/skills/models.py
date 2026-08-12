@@ -22,6 +22,7 @@ class GitHubSkillSource(models.Model):
 
 class SkillSyncJob(models.Model):
     SYNC = "sync"
+    SCAN = "scan"
     ENRICHMENT = "enrichment"
     QUEUED = "queued"
     RUNNING = "running"
@@ -35,6 +36,7 @@ class SkillSyncJob(models.Model):
     )
     OPERATION_CHOICES = (
         (SYNC, "GitHub sync"),
+        (SCAN, "GitHub candidate scan"),
         (ENRICHMENT, "Summary and classification"),
     )
 
@@ -158,3 +160,84 @@ class SharedSkillRelease(models.Model):
 
     def __str__(self):
         return f"{self.skill.name} @ {self.git_commit[:12]}"
+
+
+class SkillCandidate(models.Model):
+    class Origin(models.TextChoices):
+        UPLOAD = "upload", "用户 ZIP"
+        GITHUB = "github", "GitHub 扫描"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "待审核"
+        PUBLISHED = "published", "已发布"
+        REJECTED = "rejected", "已拒绝"
+
+    origin = models.CharField(max_length=16, choices=Origin.choices)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    submitted_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        related_name="skill_candidates",
+        null=True,
+        blank=True,
+    )
+    source = models.ForeignKey(
+        GitHubSkillSource,
+        on_delete=models.SET_NULL,
+        related_name="candidates",
+        null=True,
+        blank=True,
+    )
+    purpose = models.ForeignKey(
+        SkillPurpose,
+        on_delete=models.SET_NULL,
+        related_name="candidates",
+        null=True,
+        blank=True,
+    )
+    purpose_is_manual = models.BooleanField(default=False)
+    published_skill = models.ForeignKey(
+        SharedSkill,
+        on_delete=models.SET_NULL,
+        related_name="candidate_snapshots",
+        null=True,
+        blank=True,
+    )
+    reviewed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        related_name="reviewed_skill_candidates",
+        null=True,
+        blank=True,
+    )
+    name = models.CharField(max_length=200)
+    slug = models.SlugField(max_length=100)
+    description = models.TextField(blank=True)
+    ai_generated_description = models.TextField(blank=True)
+    ai_summary_model = models.CharField(max_length=120, blank=True)
+    ai_summary_prompt_version = models.CharField(max_length=80, blank=True)
+    original_name = models.CharField(max_length=255, blank=True)
+    source_path = models.CharField(max_length=500, blank=True)
+    source_commit = models.CharField(max_length=64, blank=True)
+    content_sha256 = models.CharField(max_length=64, db_index=True)
+    archive_remote_path = models.CharField(max_length=1000, blank=True)
+    archive_size = models.BigIntegerField(default=0)
+    validation_errors = models.JSONField(default=list, blank=True)
+    validation_warnings = models.JSONField(default=list, blank=True)
+    rejection_reason = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ("-updated_at",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=("source", "source_path"),
+                condition=models.Q(source__isnull=False),
+                name="unique_github_skill_candidate_path",
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
