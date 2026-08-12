@@ -6,10 +6,6 @@ from pathlib import Path
 from django.conf import settings
 
 
-def launch_sync_job(job_id, source_id=None):
-    _launch_job("sync_skills_job", job_id, source_id)
-
-
 def launch_scan_job(job_id, source_id=None):
     _launch_job("scan_skill_candidates_job", job_id, source_id)
 

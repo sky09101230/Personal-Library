@@ -15,6 +15,7 @@ from .downloads import load_skill_download_token
 from .candidate_services import CandidatePublishError, CandidateValidationError, create_uploaded_candidate, publish_candidate, reject_candidate
 from .forms import SkillCandidateReviewForm, SkillCandidateUploadForm, SkillDescriptionForm
 from .models import FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillCandidate, SkillPurpose
+from .services import get_or_create_skill_job, mark_job_failed
 from .storage import open_skill_stream
 from .tasks import launch_enrichment_job, launch_scan_job
 from .models import SkillSyncJob
@@ -66,12 +67,14 @@ def index(request):
     uncategorized_is_active = selected_category == "uncategorized" or active_purpose is None
     uncategorized_page = Paginator(uncategorized_skills, 24).get_page(page_number if uncategorized_is_active else 1)
     active_job = SkillSyncJob.objects.filter(status__in=[SkillSyncJob.QUEUED, SkillSyncJob.RUNNING]).first()
+    latest_job = SkillSyncJob.objects.first()
     return render(request, "skills/index.html", {
         "purposes": purposes,
         "uncategorized_page": uncategorized_page,
         "uncategorized_is_active": uncategorized_is_active,
         "query": query,
         "active_job": active_job,
+        "latest_failed_job": latest_job if not active_job and latest_job and latest_job.status == SkillSyncJob.FAILED else None,
         "sync_sources": GitHubSkillSource.objects.filter(is_enabled=True),
     })
 
@@ -279,18 +282,18 @@ def sync(request):
     selected_source, error_response = _selected_source(request)
     if error_response:
         return error_response
-    job = SkillSyncJob.objects.filter(status__in=[SkillSyncJob.QUEUED, SkillSyncJob.RUNNING]).first()
-    if job is None:
-        job = SkillSyncJob.objects.create(requested_by=request.user, operation=SkillSyncJob.SCAN)
+    job, created = get_or_create_skill_job(request.user, SkillSyncJob.SCAN)
+    if created:
         try:
             launch_scan_job(job.pk, source_id=selected_source.pk if selected_source else None)
         except OSError as exc:
-            job.status = SkillSyncJob.FAILED
-            job.error = f"无法启动候选扫描任务: {exc}"
-            job.save(update_fields=["status", "error"])
+            mark_job_failed(job, f"无法启动候选扫描任务: {exc}")
     if request.headers.get("Accept") == "application/json":
         return JsonResponse({"job_id": job.pk, "status": job.status, "operation": job.operation}, status=202)
-    messages.info(request, "候选扫描已开始；扫描结果不会直接发布。")
+    messages.info(
+        request,
+        "候选扫描已开始；扫描结果不会直接发布。" if created else "已有 Skills 后台任务正在处理，本次未重复启动。",
+    )
     return redirect("skills-index")
 
 
@@ -302,18 +305,18 @@ def enrich(request):
     selected_source, error_response = _selected_source(request)
     if error_response:
         return error_response
-    job = SkillSyncJob.objects.filter(status__in=[SkillSyncJob.QUEUED, SkillSyncJob.RUNNING]).first()
-    if job is None:
-        job = SkillSyncJob.objects.create(requested_by=request.user, operation=SkillSyncJob.ENRICHMENT)
+    job, created = get_or_create_skill_job(request.user, SkillSyncJob.ENRICHMENT)
+    if created:
         try:
             launch_enrichment_job(job.pk, source_id=selected_source.pk if selected_source else None)
         except OSError as exc:
-            job.status = SkillSyncJob.FAILED
-            job.error = f"无法启动摘要与分类任务: {exc}"
-            job.save(update_fields=["status", "error"])
+            mark_job_failed(job, f"无法启动摘要与分类任务: {exc}")
     if request.headers.get("Accept") == "application/json":
         return JsonResponse({"job_id": job.pk, "status": job.status, "operation": job.operation}, status=202)
-    messages.info(request, "摘要与分类任务已开始，请在页面上查看进度。")
+    messages.info(
+        request,
+        "摘要与分类任务已开始，请在页面上查看进度。" if created else "已有 Skills 后台任务正在处理，本次未重复启动。",
+    )
     return redirect("skills-index")
 
 
@@ -350,4 +353,5 @@ def sync_status(request, job_id):
         "failed_sources": job.failed_sources,
         "percent": job.percent,
         "error": job.error,
+        "heartbeat_at": job.heartbeat_at.isoformat() if job.heartbeat_at else "",
     })

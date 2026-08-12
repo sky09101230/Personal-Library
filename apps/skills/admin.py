@@ -5,7 +5,7 @@ from .models import FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRe
 
 @admin.register(SkillSyncJob)
 class SkillSyncJobAdmin(admin.ModelAdmin):
-    list_display = ("id", "operation", "status", "current_source", "uploaded_count", "enriched_count", "skipped_count", "created_at", "finished_at")
+    list_display = ("id", "operation", "status", "current_source", "uploaded_count", "enriched_count", "skipped_count", "created_at", "heartbeat_at", "finished_at")
     list_filter = ("operation", "status")
     readonly_fields = [field.name for field in SkillSyncJob._meta.fields]
 

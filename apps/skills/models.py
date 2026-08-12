@@ -40,7 +40,7 @@ class SkillSyncJob(models.Model):
         (ENRICHMENT, "Summary and classification"),
     )
 
-    operation = models.CharField(max_length=20, choices=OPERATION_CHOICES, default=SYNC)
+    operation = models.CharField(max_length=20, choices=OPERATION_CHOICES, default=SCAN)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=QUEUED)
     requested_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
     current_source = models.CharField(max_length=120, blank=True)
@@ -56,10 +56,18 @@ class SkillSyncJob(models.Model):
     error = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
+    heartbeat_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ("-created_at",)
+        constraints = [
+            models.UniqueConstraint(
+                models.Value(1),
+                condition=models.Q(status__in=("queued", "running")),
+                name="unique_active_skill_job",
+            ),
+        ]
 
     @property
     def percent(self):

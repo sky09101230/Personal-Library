@@ -1,9 +1,13 @@
 from django.contrib.auth.models import User
 from django.core.management import call_command
+from django.db import IntegrityError, transaction
 from django.test import TestCase
+from django.utils import timezone
+from datetime import timedelta
 from io import BytesIO
 from pathlib import Path
-from unittest.mock import ANY, MagicMock, call, patch
+from tempfile import TemporaryDirectory
+from unittest.mock import MagicMock, patch
 from urllib.parse import urlsplit
 import json
 import subprocess
@@ -13,14 +17,16 @@ from .ai_enrichment import SkillEnrichmentError, generate_skill_enrichment
 from .models import FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillPurpose, SkillSyncJob
 from .downloads import build_skill_download_url
 from .services import (
+    InactiveSkillJob,
     SkillSyncError,
     _enrich_source,
+    _finish_job,
     _run_git,
-    _sync_source,
+    _update_job,
     enrich_shared_skills,
-    sync_shared_skills,
+    get_or_create_skill_job,
 )
-from .tasks import launch_enrichment_job, launch_sync_job
+from .tasks import launch_enrichment_job
 
 
 class SkillsPageTests(TestCase):
@@ -199,37 +205,6 @@ class SkillsPageTests(TestCase):
 
 
 class SkillSyncTests(TestCase):
-    @patch("apps.skills.services._archive_directory")
-    @patch("apps.skills.services._run_git")
-    def test_sync_source_clones_configured_repository_and_branch(
-        self, run_git, archive_directory
-    ):
-        source = GitHubSkillSource.objects.create(
-            name="Research Skills",
-            slug="research-skills",
-            repository_url="https://github.com/example/research-skills.git",
-            branch="stable",
-        )
-        run_git.side_effect = ["", "b" * 40]
-        storage = MagicMock()
-
-        with patch("apps.skills.services.Path.rglob", return_value=[]):
-            result = _sync_source(source, storage)
-
-        self.assertEqual(result, (source, [], [], "b" * 40))
-        self.assertEqual(
-            run_git.call_args_list[0],
-            call(
-                "clone",
-                "--depth",
-                "1",
-                "--branch",
-                "stable",
-                "https://github.com/example/research-skills.git",
-                ANY,
-            ),
-        )
-
     @patch("apps.skills.services.generate_skill_enrichment")
     @patch("apps.skills.services._run_git")
     def test_independent_flow_enriches_and_auto_classifies_existing_skill(self, run_git, generate_enrichment):
@@ -257,11 +232,7 @@ class SkillSyncTests(TestCase):
             archive_size=10,
         )
         document = "---\nname: paper-card-extract\n---\n# Full Skill documentation"
-        skill_file = MagicMock()
-        skill_file.read_text.return_value = document
-        skill_file.parent.name = "paper-card-extract"
-        skill_file.parent.relative_to.return_value = Path("skills/paper-card-extract")
-        run_git.side_effect = ["", commit]
+        run_git.side_effect = ["", ""]
         generate_enrichment.return_value = {
             "summary": "该技能从论文 Markdown 中提取结构化文献卡片并保留证据记录。适合需要审慎整理研究事实、判断和复用洞见时使用。",
             "purpose_slug": purpose.slug,
@@ -269,17 +240,21 @@ class SkillSyncTests(TestCase):
             "prompt_version": "plab-skill-enrichment-v1",
         }
 
-        with patch("apps.skills.services.Path.rglob", return_value=[skill_file]):
+        with patch("apps.skills.services.Path.read_text", return_value=document):
             result = _enrich_source(source)
 
         skill.refresh_from_db()
-        self.assertEqual(result, (source, [skill], [], commit))
+        self.assertEqual(result, (source, [skill], []))
         self.assertEqual(skill.description, generate_enrichment.return_value["summary"])
         self.assertEqual(skill.ai_generated_description, generate_enrichment.return_value["summary"])
         self.assertEqual(skill.purpose, purpose)
         self.assertEqual(skill.ai_summary_commit, commit)
         self.assertEqual(skill.ai_summary_model, "deepseek-v4-flash")
         self.assertEqual(generate_enrichment.call_args.args[1], document)
+        self.assertEqual(
+            run_git.call_args_list[1].args[-4:],
+            ("checkout", "--detach", "--force", commit),
+        )
 
         manual_purpose = SkillPurpose.objects.create(name="Manual category", slug="manual-category")
         skill.purpose = manual_purpose
@@ -291,8 +266,8 @@ class SkillSyncTests(TestCase):
             **generate_enrichment.return_value,
             "summary": "这是 DeepSeek 重新生成的第一句摘要。这是 DeepSeek 重新生成的第二句摘要。",
         }
-        run_git.side_effect = ["", commit]
-        with patch("apps.skills.services.Path.rglob", return_value=[skill_file]):
+        run_git.side_effect = ["", ""]
+        with patch("apps.skills.services.Path.read_text", return_value=document):
             _enrich_source(source)
 
         skill.refresh_from_db()
@@ -301,14 +276,14 @@ class SkillSyncTests(TestCase):
         self.assertEqual(skill.ai_generated_description, generate_enrichment.return_value["summary"])
 
     @patch("apps.skills.services._enrich_source")
-    @patch("apps.skills.services.get_nas_skill_storage")
+    @patch("apps.skills.storage.get_nas_skill_storage")
     def test_enrichment_flow_never_initializes_archive_storage(self, get_storage, enrich_source):
         source = GitHubSkillSource.objects.create(
             name="Research Skills",
             slug="research-skills",
             repository_url="https://github.com/example/research-skills.git",
         )
-        enrich_source.return_value = (source, [], [], "b" * 40)
+        enrich_source.return_value = (source, [], [])
         job = SkillSyncJob.objects.create(operation=SkillSyncJob.ENRICHMENT)
 
         enrich_shared_skills(job=job, source_id=source.pk)
@@ -316,57 +291,76 @@ class SkillSyncTests(TestCase):
         get_storage.assert_not_called()
         enrich_source.assert_called_once_with(source, job=job)
 
+    @patch("apps.skills.services.generate_skill_enrichment")
+    def test_enrichment_reads_release_commit_when_repository_head_is_ahead(self, generate_enrichment):
+        purpose = SkillPurpose.objects.create(name="Published purpose", slug="published-purpose")
+        generate_enrichment.return_value = {
+            "summary": "摘要只来自已经审核发布的版本。仓库里尚未审核的新内容不会提前进入正式库。",
+            "purpose_slug": purpose.slug,
+            "model": "deepseek-v4-flash",
+            "prompt_version": "plab-skill-enrichment-v1",
+        }
+        with TemporaryDirectory(prefix="plab-enrichment-test-") as temporary_directory:
+            repository = Path(temporary_directory) / "source"
+            skill_directory = repository / "skills" / "release-bound"
+            skill_directory.mkdir(parents=True)
+
+            def git(*arguments):
+                return subprocess.run(
+                    ["git", *arguments],
+                    cwd=repository,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                ).stdout.strip()
+
+            git("init")
+            git("config", "user.name", "PLAB Tests")
+            git("config", "user.email", "tests@example.invalid")
+            skill_file = skill_directory / "SKILL.md"
+            skill_file.write_text("---\nname: release-bound\n---\n# Published content", encoding="utf-8")
+            git("add", ".")
+            git("commit", "-m", "published")
+            release_commit = git("rev-parse", "HEAD")
+            skill_file.write_text("---\nname: release-bound\n---\n# Unreviewed HEAD content", encoding="utf-8")
+            git("add", ".")
+            git("commit", "-m", "unreviewed")
+            self.assertNotEqual(release_commit, git("rev-parse", "HEAD"))
+
+            source = GitHubSkillSource.objects.create(
+                name="Release-bound source",
+                slug="release-bound-source",
+                repository_url=repository.as_uri(),
+            )
+            skill = SharedSkill.objects.create(
+                source=source,
+                slug="release-bound",
+                name="release-bound",
+                description="Old description",
+                source_path="skills/release-bound",
+            )
+            SharedSkillRelease.objects.create(
+                skill=skill,
+                git_commit=release_commit,
+                storage_backend="nas_webdav",
+                archive_name="release-bound.zip",
+                archive_remote_path="/skills/release-bound.zip",
+                archive_size=10,
+            )
+
+            _enrich_source(source)
+
+        skill.refresh_from_db()
+        self.assertIn("Published content", generate_enrichment.call_args.args[1])
+        self.assertNotIn("Unreviewed HEAD", generate_enrichment.call_args.args[1])
+        self.assertEqual(skill.ai_summary_commit, release_commit)
+
     @patch("apps.skills.services.subprocess.run")
     def test_git_failure_keeps_the_actual_git_error(self, run):
         run.side_effect = subprocess.CalledProcessError(128, ["git"], stderr="connection timed out")
 
         with self.assertRaisesMessage(SkillSyncError, "connection timed out"):
             _run_git("clone", "https://github.com/example/missing.git", "repository")
-
-    @patch("apps.skills.services._sync_source")
-    @patch("apps.skills.services.get_nas_skill_storage")
-    def test_sync_continues_after_a_source_failure(self, get_storage, sync_source):
-        first = GitHubSkillSource.objects.create(
-            name="First source",
-            slug="first-source",
-            repository_url="https://github.com/example/first.git",
-        )
-        second = GitHubSkillSource.objects.create(
-            name="Second source",
-            slug="second-source",
-            repository_url="https://github.com/example/second.git",
-        )
-        sync_source.side_effect = [SkillSyncError("First source: network unavailable"), (second, [], [], "a" * 40)]
-        job = SkillSyncJob.objects.create()
-
-        sync_shared_skills(job=job)
-        job.refresh_from_db()
-
-        self.assertEqual(job.status, SkillSyncJob.COMPLETED)
-        self.assertEqual(job.failed_sources, 1)
-        self.assertEqual(job.sources_completed, 1)
-        self.assertIn("network unavailable", job.error)
-        self.assertEqual(sync_source.call_count, 2)
-        get_storage.return_value.ensure_root.assert_called_once_with()
-
-    @patch("apps.skills.services._sync_source")
-    @patch("apps.skills.services.get_nas_skill_storage")
-    def test_sync_imports_only_selected_source(self, get_storage, sync_source):
-        first = GitHubSkillSource.objects.create(
-            name="First source", slug="first-source", repository_url="https://github.com/example/first.git"
-        )
-        second = GitHubSkillSource.objects.create(
-            name="Second source", slug="second-source", repository_url="https://github.com/example/second.git"
-        )
-        sync_source.return_value = (second, [], [], "a" * 40)
-        job = SkillSyncJob.objects.create()
-
-        sync_shared_skills(job=job, source_id=second.pk)
-
-        sync_source.assert_called_once_with(second, get_storage.return_value, job=job)
-        self.assertNotEqual(first.pk, second.pk)
-        job.refresh_from_db()
-        self.assertEqual(job.sources_total, 1)
 
 
 class SkillEnrichmentTests(TestCase):
@@ -573,6 +567,7 @@ class SkillSyncJobViewTests(TestCase):
         launch_scan_job.assert_not_called()
 
     def test_sync_status_returns_current_progress(self):
+        heartbeat = timezone.now()
         job = SkillSyncJob.objects.create(
             requested_by=self.user,
             status=SkillSyncJob.RUNNING,
@@ -584,6 +579,8 @@ class SkillSyncJobViewTests(TestCase):
             skills_processed=4,
             uploaded_count=3,
             skipped_count=1,
+            heartbeat_at=heartbeat,
+            error="来源暂时不可用",
         )
 
         response = self.client.get(f"/skills/sync/{job.pk}/status/")
@@ -591,17 +588,100 @@ class SkillSyncJobViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["percent"], 40)
         self.assertEqual(response.json()["current_skill"], "literature-review")
-        self.assertEqual(response.json()["operation"], SkillSyncJob.SYNC)
+        self.assertEqual(response.json()["operation"], SkillSyncJob.SCAN)
+        self.assertEqual(response.json()["heartbeat_at"], heartbeat.isoformat())
+        self.assertEqual(response.json()["error"], "来源暂时不可用")
+
+    def test_latest_failed_job_reason_is_visible_on_skills_page(self):
+        SkillSyncJob.objects.create(
+            requested_by=self.user,
+            status=SkillSyncJob.FAILED,
+            error="后台进程意外退出",
+            heartbeat_at=timezone.now(),
+            finished_at=timezone.now(),
+        )
+
+        response = self.client.get("/skills/")
+
+        self.assertContains(response, "最近一次 Skills 任务失败")
+        self.assertContains(response, "后台进程意外退出")
+        self.assertContains(response, "最近活动")
+
+    @patch("apps.skills.views.launch_enrichment_job")
+    def test_second_start_reuses_active_job(self, launch_job):
+        active = SkillSyncJob.objects.create(
+            requested_by=self.user,
+            operation=SkillSyncJob.SCAN,
+            heartbeat_at=timezone.now(),
+        )
+
+        response = self.client.post("/skills/enrich/", HTTP_ACCEPT="application/json")
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["job_id"], active.pk)
+        self.assertEqual(SkillSyncJob.objects.count(), 1)
+        launch_job.assert_not_called()
+
+
+class SkillSyncJobLifecycleTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="job-admin", password="Strong-pass-1234")
+
+    def test_database_allows_only_one_active_job(self):
+        SkillSyncJob.objects.create(requested_by=self.user, heartbeat_at=timezone.now())
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                SkillSyncJob.objects.create(
+                    requested_by=self.user,
+                    operation=SkillSyncJob.ENRICHMENT,
+                    heartbeat_at=timezone.now(),
+                )
+
+    @patch.dict("os.environ", {"SKILL_JOB_STALE_SECONDS": "60"}, clear=False)
+    def test_stale_job_is_failed_before_new_job_is_created(self):
+        old_heartbeat = timezone.now() - timedelta(minutes=2)
+        stale = SkillSyncJob.objects.create(
+            requested_by=self.user,
+            status=SkillSyncJob.RUNNING,
+            heartbeat_at=old_heartbeat,
+        )
+
+        job, created = get_or_create_skill_job(self.user, SkillSyncJob.ENRICHMENT)
+
+        stale.refresh_from_db()
+        self.assertTrue(created)
+        self.assertNotEqual(job.pk, stale.pk)
+        self.assertEqual(stale.status, SkillSyncJob.FAILED)
+        self.assertIn("长时间没有活动", stale.error)
+        self.assertIsNotNone(stale.finished_at)
+
+    def test_progress_refreshes_heartbeat_and_terminal_job_cannot_revive(self):
+        old_heartbeat = timezone.now() - timedelta(minutes=5)
+        job = SkillSyncJob.objects.create(
+            requested_by=self.user,
+            status=SkillSyncJob.RUNNING,
+            heartbeat_at=old_heartbeat,
+        )
+
+        _update_job(job, current_skill="paper-card")
+        job.refresh_from_db()
+        self.assertGreater(job.heartbeat_at, old_heartbeat)
+
+        job.status = SkillSyncJob.FAILED
+        job.error = "worker stopped"
+        job.finished_at = timezone.now()
+        job.save(update_fields=["status", "error", "finished_at"])
+        self.assertFalse(_finish_job(job, SkillSyncJob.COMPLETED))
+        with self.assertRaises(InactiveSkillJob):
+            _update_job(job, current_skill="should-not-return")
+        call_command("enrich_skills_job", job.pk)
+        job.refresh_from_db()
+        self.assertEqual(job.status, SkillSyncJob.FAILED)
+        self.assertEqual(job.error, "worker stopped")
 
 
 class SkillSyncTaskTests(TestCase):
-    @patch("apps.skills.tasks.subprocess.Popen")
-    def test_launch_sync_job_passes_selected_source_to_command(self, popen):
-        launch_sync_job(7, source_id=23)
-
-        command = popen.call_args.args[0]
-        self.assertEqual(command[-3:], ["7", "--source-id", "23"])
-
     @patch("apps.skills.tasks.subprocess.Popen")
     def test_launch_enrichment_job_uses_independent_command(self, popen):
         launch_enrichment_job(8, source_id=24)

@@ -15,7 +15,16 @@ from apps.box_upload.storage import NAS_WEBDAV
 
 from .ai_enrichment import SkillEnrichmentError, generate_skill_enrichment
 from .models import GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillCandidate, SkillPurpose, SkillSyncJob
-from .services import SkillSyncError, _archive_directory, _fail_job, _read_metadata, _run_git, _update_job
+from .services import (
+    SkillSyncError,
+    _archive_directory,
+    _fail_job,
+    _finish_job,
+    _read_metadata,
+    _run_git,
+    _start_job,
+    _update_job,
+)
 from .storage import get_nas_skill_candidate_storage, get_nas_skill_storage
 
 
@@ -189,11 +198,7 @@ def enrich_candidate(candidate, document):
 
 
 def scan_github_candidates(job=None, source_id=None):
-    if job is not None:
-        job.status = SkillSyncJob.RUNNING
-        job.started_at = timezone.now()
-        job.error = ""
-        job.save(update_fields=["status", "started_at", "error"])
+    _start_job(job)
     sources = GitHubSkillSource.objects.filter(is_enabled=True)
     if source_id is not None:
         sources = sources.filter(pk=source_id)
@@ -206,8 +211,7 @@ def scan_github_candidates(job=None, source_id=None):
     except LiteratureStorageError as exc:
         raise _fail_job(job, str(exc)) from exc
     if job is not None:
-        job.sources_total = len(sources)
-        job.save(update_fields=["sources_total"])
+        _update_job(job, sources_total=len(sources))
     results = []
     errors = []
     for source in sources:
@@ -217,18 +221,15 @@ def scan_github_candidates(job=None, source_id=None):
         except SkillSyncError as exc:
             errors.append(str(exc))
             if job is not None:
-                job.failed_sources += 1
-                job.error = "\n".join(errors)
-                job.save(update_fields=["failed_sources", "error"])
+                _update_job(job, failed_sources=job.failed_sources + 1, error="\n".join(errors))
         else:
             _update_job(job, sources_completed=(job.sources_completed + 1) if job is not None else 0)
     if job is not None:
-        job.status = SkillSyncJob.FAILED if errors and not results else SkillSyncJob.COMPLETED
-        job.current_source = ""
-        job.current_skill = ""
-        job.error = "\n".join(errors)
-        job.finished_at = timezone.now()
-        job.save(update_fields=["status", "current_source", "current_skill", "error", "finished_at"])
+        _finish_job(
+            job,
+            SkillSyncJob.FAILED if errors and not results else SkillSyncJob.COMPLETED,
+            "\n".join(errors),
+        )
     if errors and not results:
         raise SkillSyncError("\n".join(errors))
     return results
@@ -248,8 +249,7 @@ def _scan_source(source, storage, job=None):
         commit = _run_git("-C", str(repository), "rev-parse", "HEAD").strip()
         skill_files = list(repository.rglob("SKILL.md"))
         if job is not None:
-            job.skills_total += len(skill_files)
-            job.save(update_fields=["skills_total"])
+            _update_job(job, skills_total=job.skills_total + len(skill_files))
         refreshed = []
         skipped = []
         for index, skill_file in enumerate(skill_files):
