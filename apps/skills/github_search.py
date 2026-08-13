@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import PurePosixPath
 from urllib.error import HTTPError, URLError
@@ -10,6 +11,7 @@ from urllib.request import Request, urlopen
 
 from django.core.cache import cache
 from django.db.models import Q
+from django.utils.dateparse import parse_datetime
 from django.utils.text import slugify
 
 from .models import GitHubSkillSource
@@ -18,6 +20,8 @@ from .models import GitHubSkillSource
 GITHUB_API_URL = "https://api.github.com"
 SEARCH_PAGE_SIZE = 20
 SEARCH_CACHE_SECONDS = 180
+REPOSITORY_CACHE_SECONDS = 1800
+REPOSITORY_METADATA_WORKERS = 4
 REPOSITORY_PART_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,100}\Z")
 
 
@@ -85,7 +89,13 @@ def search_github_skills(keyword, page=1):
         repository = item.get("repository") or {}
         full_name = repository.get("full_name", "")
         path = item.get("path", "")
-        if repository.get("private") or "/" not in full_name or PurePosixPath(path).name != "SKILL.md":
+        blob_sha = str(item.get("sha") or "").lower()
+        if (
+            repository.get("private")
+            or "/" not in full_name
+            or PurePosixPath(path).name != "SKILL.md"
+            or re.fullmatch(r"[0-9a-f]{40,64}", blob_sha) is None
+        ):
             continue
         owner, repository_name = full_name.split("/", 1)
         items.append({
@@ -93,9 +103,18 @@ def search_github_skills(keyword, page=1):
             "repository": repository_name,
             "full_name": full_name,
             "path": path,
+            "blob_sha": blob_sha,
             "html_url": item.get("html_url", ""),
             "repository_url": repository.get("html_url", ""),
         })
+    metadata = _repository_metadata_for_items(items)
+    for item in items:
+        item.update(metadata.get(item["full_name"], {"stars": None, "pushed_at": ""}))
+    items.sort(key=lambda item: (
+        item["stars"] is not None,
+        item["stars"] if item["stars"] is not None else -1,
+        item["pushed_at"],
+    ), reverse=True)
     total_count = min(int(payload.get("total_count", 0)), 1000)
     result = {
         "items": items,
@@ -105,6 +124,41 @@ def search_github_skills(keyword, page=1):
         "pages": (total_count + SEARCH_PAGE_SIZE - 1) // SEARCH_PAGE_SIZE,
     }
     cache.set(cache_key, result, SEARCH_CACHE_SECONDS)
+    return result
+
+
+def _repository_metadata_for_items(items):
+    full_names = list(dict.fromkeys(item["full_name"] for item in items))
+    if not full_names:
+        return {}
+    results = {}
+    with ThreadPoolExecutor(max_workers=min(REPOSITORY_METADATA_WORKERS, len(full_names))) as executor:
+        futures = {executor.submit(_repository_metadata, full_name): full_name for full_name in full_names}
+        for future in as_completed(futures):
+            try:
+                results[futures[future]] = future.result()
+            except GitHubSearchError:
+                continue
+    return results
+
+
+def _repository_metadata(full_name):
+    digest = hashlib.sha256(full_name.casefold().encode()).hexdigest()
+    cache_key = f"github-repository-metadata:{digest}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    owner, repository = full_name.split("/", 1)
+    payload = _request_json(f"/repos/{quote(owner, safe='')}/{quote(repository, safe='')}")
+    try:
+        stars = max(0, int(payload.get("stargazers_count", 0)))
+    except (TypeError, ValueError):
+        stars = 0
+    pushed_at = str(payload.get("pushed_at") or "")
+    if pushed_at and parse_datetime(pushed_at) is None:
+        pushed_at = ""
+    result = {"stars": stars, "pushed_at": pushed_at, "archived": bool(payload.get("archived"))}
+    cache.set(cache_key, result, REPOSITORY_CACHE_SECONDS)
     return result
 
 

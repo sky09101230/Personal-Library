@@ -15,7 +15,13 @@ from django.core.management import call_command
 from django.test import TestCase
 
 from .candidate_services import _scan_source
-from .github_search import GitHubSearchError, inspect_github_skill_for_import, search_github_skills, upsert_github_skill_source
+from .github_search import (
+    GitHubSearchError,
+    _repository_metadata,
+    inspect_github_skill_for_import,
+    search_github_skills,
+    upsert_github_skill_source,
+)
 from .models import GitHubSkillSource, SharedSkill, SkillCandidate, SkillSyncJob
 from .services import SkillSyncError
 from .tasks import launch_scan_job
@@ -42,10 +48,11 @@ class GitHubSearchTests(TestCase):
     @patch("apps.skills.github_search.urlopen")
     @patch.dict("os.environ", {"GITHUB_API_TOKEN": "server-only-token"})
     def test_search_is_fixed_to_public_skill_files_and_cached(self, urlopen):
-        urlopen.return_value = _Response({
+        urlopen.side_effect = [_Response({
             "total_count": 1,
             "incomplete_results": False,
             "items": [{
+                "sha": "a" * 40,
                 "path": "skills/paper/SKILL.md",
                 "html_url": "https://github.com/example/research/blob/main/skills/paper/SKILL.md",
                 "repository": {
@@ -54,19 +61,77 @@ class GitHubSearchTests(TestCase):
                     "private": False,
                 },
             }],
-        })
+        }), _Response({
+            "stargazers_count": 123,
+            "pushed_at": "2026-08-01T12:00:00Z",
+            "archived": False,
+        })]
 
         first = search_github_skills("paper review")
         second = search_github_skills("paper   review")
 
         self.assertEqual(first, second)
         self.assertEqual(first["items"][0]["path"], "skills/paper/SKILL.md")
-        self.assertEqual(urlopen.call_count, 1)
-        request = urlopen.call_args.args[0]
+        self.assertEqual(first["items"][0]["stars"], 123)
+        self.assertEqual(urlopen.call_count, 2)
+        request = urlopen.call_args_list[0].args[0]
         query = parse_qs(urlsplit(request.full_url).query)
         self.assertEqual(query["q"], ["paper review in:file filename:SKILL.md"])
         self.assertEqual(query["per_page"], ["20"])
         self.assertEqual(request.get_header("Authorization"), "Bearer server-only-token")
+
+    @patch("apps.skills.github_search._repository_metadata")
+    @patch("apps.skills.github_search._request_json")
+    def test_search_sorts_current_page_by_stars(self, request_json, repository_metadata):
+        request_json.return_value = {
+            "total_count": 2,
+            "items": [
+                {"sha": "a" * 40, "path": "SKILL.md", "html_url": "https://github.com/low/repo/blob/main/SKILL.md", "repository": {"full_name": "low/repo", "html_url": "https://github.com/low/repo", "private": False}},
+                {"sha": "b" * 40, "path": "tools/SKILL.md", "html_url": "https://github.com/high/repo/blob/main/tools/SKILL.md", "repository": {"full_name": "high/repo", "html_url": "https://github.com/high/repo", "private": False}},
+            ],
+        }
+        repository_metadata.side_effect = lambda full_name: {
+            "low/repo": {"stars": 2, "pushed_at": "2026-08-01T00:00:00Z"},
+            "high/repo": {"stars": 200, "pushed_at": "2026-07-01T00:00:00Z"},
+        }[full_name]
+
+        result = search_github_skills("academic")
+
+        self.assertEqual([item["full_name"] for item in result["items"]], ["high/repo", "low/repo"])
+
+    @patch("apps.skills.github_search._repository_metadata")
+    @patch("apps.skills.github_search._request_json")
+    def test_repository_metadata_failure_keeps_search_results(self, request_json, repository_metadata):
+        request_json.return_value = {
+            "total_count": 2,
+            "items": [
+                {"sha": "a" * 40, "path": "SKILL.md", "repository": {"full_name": "ok/repo", "private": False}},
+                {"sha": "b" * 40, "path": "SKILL.md", "repository": {"full_name": "down/repo", "private": False}},
+            ],
+        }
+
+        def load_metadata(full_name):
+            if full_name == "down/repo":
+                raise GitHubSearchError("GitHub 暂时无法完成搜索，请稍后再试。")
+            return {"stars": 8, "pushed_at": "2026-08-01T00:00:00Z"}
+
+        repository_metadata.side_effect = load_metadata
+
+        result = search_github_skills("research")
+
+        self.assertEqual(len(result["items"]), 2)
+        self.assertEqual(result["items"][0]["full_name"], "ok/repo")
+        self.assertIsNone(result["items"][1]["stars"])
+
+    @patch("apps.skills.github_search._request_json")
+    def test_repository_metadata_has_separate_cache(self, request_json):
+        request_json.return_value = {"stargazers_count": 42, "pushed_at": "2026-08-01T00:00:00Z"}
+
+        first = _repository_metadata("example/research")
+        second = _repository_metadata("example/research")
+
+        self.assertEqual(first, second)
+        request_json.assert_called_once()
 
     @patch("apps.skills.github_search.urlopen")
     @patch.dict("os.environ", {}, clear=True)
@@ -175,6 +240,8 @@ class GitHubSearchPageTests(TestCase):
                 "repository_url": "https://github.com/example/research",
                 "path": "skills/paper/SKILL.md",
                 "html_url": "https://github.com/example/research/blob/main/skills/paper/SKILL.md",
+                "stars": 321,
+                "pushed_at": "2026-08-01T12:00:00Z",
             }],
             "total_count": 1,
             "incomplete_results": False,
@@ -187,6 +254,9 @@ class GitHubSearchPageTests(TestCase):
 
         self.assertContains(response, "example/research")
         self.assertContains(response, "skills/paper/SKILL.md")
+        self.assertContains(response, "321")
+        self.assertContains(response, "2026-08-01")
+        self.assertContains(response, "本页内按 Star")
         self.assertContains(response, "检查许可证并加入候选池")
         search.assert_called_once_with("literature", page=1)
 
