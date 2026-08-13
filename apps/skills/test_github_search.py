@@ -432,6 +432,7 @@ class GitHubSearchPageTests(TestCase):
         self.assertContains(response, "321")
         self.assertContains(response, "2026-08-01")
         self.assertContains(response, "本页内按 Star")
+        self.assertContains(response, 'class="content content-wide"')
         self.assertContains(response, "它读取论文资料并生成结构化结果")
         self.assertContains(response, "检查许可证并加入候选池")
         search.assert_called_once_with("literature", page=1)

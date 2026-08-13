@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}学术 Skill 推荐 | PLAB{% endblock %}
+{% block content_class %}content-wide{% endblock %}
 {% block content %}
 <div class="page-head"><p class="eyebrow">管理员工具</p><h1>AI 推荐的学术 Skills 仓库</h1><p class="subtle">从固定学术关键词的有限 GitHub 结果中评估，不代表 GitHub 全量排行。推荐内容尚未发布。</p></div>
 <nav class="skills-subnav" aria-label="Skills 导航"><a href="{% url 'skills-index' %}">全部 Skills</a><a href="{% url 'skills-candidates' %}">候选审核</a><a href="{% url 'skills-discover-github' %}">GitHub 搜索</a><a class="active" href="{% url 'skills-academic-recommendations' %}">学术推荐</a></nav>

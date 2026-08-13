@@ -153,6 +153,7 @@ class AcademicRecommendationPageTests(TestCase):
         response = self.client.get("/skills/discover/academic/")
 
         self.assertContains(response, "AI 推荐的学术 Skills 仓库")
+        self.assertContains(response, 'class="content content-wide"')
         self.assertContains(response, "example/research")
         self.assertContains(response, "它整理论文与引用资料")
         self.assertContains(response, "321")
