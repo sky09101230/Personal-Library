@@ -438,12 +438,14 @@ class UploadPageTests(TestCase):
 
         self.assertTemplateUsed(response, "box_upload/library.html")
         self.assertContains(response, "我的文献")
-        self.assertContains(response, "mine.pdf")
-        self.assertContains(response, "other.pdf")
+        self.assertNotContains(response, "mine.pdf · PDF 提交者")
+        self.assertNotContains(response, "other.pdf")
+        self.assertContains(response, "文献操作")
+        self.assertContains(response, "PDF 附件")
         self.assertContains(response, '<div class="file-meta">关联用户：member、other</div>', html=True)
         self.assertContains(response, "关系：你实际上传过 PDF")
-        self.assertContains(response, "mine.pdf · PDF 提交者：member")
-        self.assertContains(response, "other.pdf · PDF 提交者：other")
+        self.assertContains(response, "PDF 提交者：member")
+        self.assertContains(response, "PDF 提交者：other")
         self.assertContains(response, f'/uploads/{UploadedDocument.objects.get(original_name="mine.pdf").pk}/delete/')
         self.assertNotContains(response, f'/uploads/{UploadedDocument.objects.get(original_name="other.pdf").pk}/delete/')
 
@@ -464,7 +466,8 @@ class UploadPageTests(TestCase):
 
         self.assertContains(response, "Linked paper")
         self.assertContains(response, "关系：通过 DOI 或 Zotero 关联，未重复保存 PDF")
-        self.assertContains(response, "owner.pdf · PDF 提交者：owner")
+        self.assertNotContains(response, "owner.pdf")
+        self.assertContains(response, "PDF 提交者：owner")
         self.assertNotContains(response, f'/uploads/{document.pk}/delete/')
         self.assertNotContains(response, "生成 AI 建议")
 
@@ -654,11 +657,11 @@ class UploadPageTests(TestCase):
 
         response = self.client.get("/library/")
 
-        for heading in ("标题", "作者", "期刊与年份", "摘要", "状态", "操作"):
+        for heading in ("标题", "作者", "期刊与年份", "摘要", "状态", "文献操作", "PDF 附件"):
             self.assertContains(response, heading)
         for value in ("Complete metadata paper", "Author Four", "Complete abstract text.", "10.1000/complete", "Complete Journal", "2026", "在线打开", "下载"):
             self.assertContains(response, value)
-        for removed in ("user-tag", "source-tag", "ai-tag", "/complete.pdf", "123456", "查看完整证据", "外部引用"):
+        for removed in ("user-tag", "source-tag", "ai-tag", "complete.pdf", "/complete.pdf", "123456", "查看完整证据", "外部引用"):
             self.assertNotContains(response, removed)
         self.assertContains(response, "元数据需处理")
         self.assertContains(response, "不完整、待复核或冲突")
@@ -668,7 +671,8 @@ class UploadPageTests(TestCase):
         self.assertContains(response, "PDF 上传成功后会立即向 Agent 发布")
         html = response.content.decode()
         self.assertLess(html.index(">摘要</th>"), html.index(">状态</th>"))
-        self.assertLess(html.index(">状态</th>"), html.index(">操作</th>"))
+        self.assertLess(html.index(">状态</th>"), html.index(">文献操作</th>"))
+        self.assertLess(html.index(">文献操作</th>"), html.index(">PDF 附件</th>"))
 
     def test_library_workflow_filters_and_staff_action_link(self):
         needs_review = CanonicalDocument.objects.create(

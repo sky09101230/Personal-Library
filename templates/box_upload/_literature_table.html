@@ -7,7 +7,8 @@
         <th class="source-column">期刊与年份</th>
         {% if show_abstract %}<th class="abstract-column">摘要</th>{% endif %}
         <th class="status-column">状态</th>
-        <th class="actions-column">操作</th>
+        <th class="document-actions-column">文献操作</th>
+        <th class="attachment-actions-column">PDF 附件</th>
       </tr>
     </thead>
     <tbody>
@@ -34,7 +35,7 @@
           <div class="file-meta">置信度：{% if literature.metadata_confidence != None %}{{ literature.metadata_confidence }}{% else %}—{% endif %}</div>
           </div>
         </td>
-        <td class="actions-column">
+        <td class="document-actions-column">
           <div class="row-actions">
           {% with proposal=literature.latest_metadata_proposal %}
             {% if proposal %}
@@ -52,9 +53,11 @@
           </div>
           <div class="file-meta">关联用户：{% for uploader in literature.uploaders.all %}{{ uploader.username }}{% if not forloop.last %}、{% endif %}{% empty %}—{% endfor %}</div>
           {% if is_my_uploads %}<div class="file-meta">{% if literature.has_own_upload %}关系：你实际上传过 PDF{% else %}关系：通过 DOI 或 Zotero 关联，未重复保存 PDF{% endif %}</div>{% endif %}
+        </td>
+        <td class="attachment-actions-column">
           {% for upload in literature.uploads.all %}
           <div class="attachment-item">
-            <div class="file-meta">{{ upload.original_name }} · PDF 提交者：{{ upload.uploader.username }}</div>
+            <div class="file-meta">PDF 提交者：{{ upload.uploader.username }}</div>
             <div class="row-actions">
               <a class="row-action primary-action" href="{% url 'view-document' upload.pk %}" target="_blank" rel="noopener">在线打开</a>
               <a class="row-action" href="{% url 'download-document' upload.pk %}">下载</a>
@@ -64,7 +67,7 @@
           {% empty %}<span class="subtle">无 PDF</span>{% endfor %}
         </td>
       </tr>
-      {% empty %}<tr><td colspan="{% if show_abstract %}6{% else %}5{% endif %}">尚无文献记录。</td></tr>{% endfor %}
+      {% empty %}<tr><td colspan="{% if show_abstract %}7{% else %}6{% endif %}">尚无文献记录。</td></tr>{% endfor %}
     </tbody>
   </table>
 </div>
