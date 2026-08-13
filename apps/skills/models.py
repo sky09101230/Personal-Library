@@ -24,6 +24,7 @@ class SkillSyncJob(models.Model):
     SYNC = "sync"
     SCAN = "scan"
     ENRICHMENT = "enrichment"
+    RECOMMENDATION = "recommendation"
     QUEUED = "queued"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -38,6 +39,7 @@ class SkillSyncJob(models.Model):
         (SYNC, "GitHub sync"),
         (SCAN, "GitHub candidate scan"),
         (ENRICHMENT, "Summary and classification"),
+        (RECOMMENDATION, "Academic Skill recommendations"),
     )
 
     operation = models.CharField(max_length=20, choices=OPERATION_CHOICES, default=SCAN)
@@ -146,6 +148,32 @@ class FeaturedSkill(models.Model):
 
     def __str__(self):
         return self.skill.name
+
+
+class AcademicSkillRecommendation(models.Model):
+    full_name = models.CharField(max_length=200, unique=True)
+    skill_path = models.CharField(max_length=500)
+    recommendation = models.TextField()
+    stars = models.PositiveIntegerField(default=0)
+    repository_pushed_at = models.DateTimeField(null=True, blank=True)
+    blob_sha = models.CharField(max_length=64)
+    ai_model = models.CharField(max_length=120)
+    ai_prompt_version = models.CharField(max_length=80)
+    refreshed_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ("-stars", "-repository_pushed_at", "full_name")
+
+    @property
+    def owner(self):
+        return self.full_name.split("/", 1)[0]
+
+    @property
+    def repository(self):
+        return self.full_name.split("/", 1)[1]
+
+    def __str__(self):
+        return self.full_name
 
 
 class SharedSkillRelease(models.Model):

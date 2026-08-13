@@ -24,10 +24,10 @@ from .github_search import (
     summarize_github_search_items,
     upsert_github_skill_source,
 )
-from .models import FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillCandidate, SkillPurpose
+from .models import AcademicSkillRecommendation, FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillCandidate, SkillPurpose
 from .services import get_or_create_skill_job, mark_job_failed
 from .storage import open_skill_stream
-from .tasks import launch_enrichment_job, launch_scan_job
+from .tasks import launch_academic_recommendations_job, launch_enrichment_job, launch_scan_job
 from .models import SkillSyncJob
 
 
@@ -118,6 +118,35 @@ def discover_github(request):
         "search_error": search_error,
         "summary_error": summary_error,
     })
+
+
+@login_required
+@user_passes_test(lambda user: user.is_staff)
+@require_GET
+def academic_recommendations(request):
+    latest_job = SkillSyncJob.objects.filter(operation=SkillSyncJob.RECOMMENDATION).first()
+    return render(request, "skills/academic_recommendations.html", {
+        "recommendations": AcademicSkillRecommendation.objects.all(),
+        "latest_job": latest_job,
+    })
+
+
+@login_required
+@user_passes_test(lambda user: user.is_staff)
+@require_POST
+def refresh_academic_recommendations(request):
+    job, created = get_or_create_skill_job(request.user, SkillSyncJob.RECOMMENDATION)
+    if created:
+        try:
+            launch_academic_recommendations_job(job.pk)
+        except OSError as exc:
+            mark_job_failed(job, f"无法启动学术推荐任务: {exc}")
+            messages.error(request, "无法启动学术推荐任务，请检查后台运行环境。")
+        else:
+            messages.info(request, "学术推荐刷新已在后台开始，完成后重新打开本页即可查看。")
+    else:
+        messages.info(request, "已有 Skills 后台任务正在处理，本次未重复启动。")
+    return redirect("skills-academic-recommendations")
 
 
 @login_required

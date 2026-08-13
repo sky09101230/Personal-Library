@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillCandidate, SkillPurpose, SkillSyncJob
+from .models import AcademicSkillRecommendation, FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillCandidate, SkillPurpose, SkillSyncJob
 
 
 @admin.register(SkillSyncJob)
@@ -45,6 +45,13 @@ class FeaturedSkillAdmin(admin.ModelAdmin):
     list_display = ("skill", "recommendation", "sort_order")
     autocomplete_fields = ("skill",)
     search_fields = ("skill__name", "recommendation")
+
+
+@admin.register(AcademicSkillRecommendation)
+class AcademicSkillRecommendationAdmin(admin.ModelAdmin):
+    list_display = ("full_name", "stars", "repository_pushed_at", "refreshed_at")
+    search_fields = ("full_name", "skill_path", "recommendation")
+    readonly_fields = [field.name for field in AcademicSkillRecommendation._meta.fields]
 
 
 @admin.register(SharedSkillRelease)

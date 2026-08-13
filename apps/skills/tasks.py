@@ -23,6 +23,10 @@ def launch_enrichment_job(job_id, source_id=None):
     _launch_job("enrich_skills_job", job_id, source_id)
 
 
+def launch_academic_recommendations_job(job_id):
+    _launch_job("refresh_academic_skill_recommendations_job", job_id, None)
+
+
 def _launch_job(command_name, job_id, source_id, arguments=()):
     command = [sys.executable, str(Path(settings.BASE_DIR) / "manage.py"), command_name, str(job_id)]
     if source_id is not None:

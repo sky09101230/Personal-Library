@@ -2,7 +2,7 @@
 {% block title %}搜索 GitHub Skill | PLAB{% endblock %}
 {% block content %}
 <div class="page-head"><p class="eyebrow">管理员工具</p><h1>搜索 GitHub Skill</h1><p class="subtle">按关键词查找公开仓库中的 <code>SKILL.md</code>。GitHub 的索引可能不完整。</p></div>
-<nav class="skills-subnav" aria-label="Skills 导航"><a href="{% url 'skills-index' %}">全部 Skills</a><a href="{% url 'skills-candidates' %}">候选审核</a><a class="active" href="{% url 'skills-discover-github' %}">GitHub 搜索</a></nav>
+<nav class="skills-subnav" aria-label="Skills 导航"><a href="{% url 'skills-index' %}">全部 Skills</a><a href="{% url 'skills-candidates' %}">候选审核</a><a class="active" href="{% url 'skills-discover-github' %}">GitHub 搜索</a><a href="{% url 'skills-academic-recommendations' %}">学术推荐</a></nav>
 {% if messages %}{% for message in messages %}<div class="notice{% if message.tags == 'error' %} error{% endif %}">{{ message }}</div>{% endfor %}{% endif %}
 <div class="panel">
   <form method="get" class="library-search" role="search">

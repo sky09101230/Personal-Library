@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}学术 Skill 推荐 | PLAB{% endblock %}
+{% block content %}
+<div class="page-head"><p class="eyebrow">管理员工具</p><h1>AI 推荐的学术 Skills 仓库</h1><p class="subtle">从固定学术关键词的有限 GitHub 结果中评估，不代表 GitHub 全量排行。推荐内容尚未发布。</p></div>
+<nav class="skills-subnav" aria-label="Skills 导航"><a href="{% url 'skills-index' %}">全部 Skills</a><a href="{% url 'skills-candidates' %}">候选审核</a><a href="{% url 'skills-discover-github' %}">GitHub 搜索</a><a class="active" href="{% url 'skills-academic-recommendations' %}">学术推荐</a></nav>
+{% if messages %}{% for message in messages %}<div class="notice{% if message.tags == 'error' %} error{% endif %}">{{ message }}</div>{% endfor %}{% endif %}
+<div class="panel">
+  <form method="post" action="{% url 'skills-refresh-academic-recommendations' %}">{% csrf_token %}<button class="primary" type="submit">后台刷新学术推荐</button></form>
+  {% if latest_job %}<p class="help">最近任务：{% if latest_job.status == 'completed' %}已完成{% elif latest_job.status == 'failed' %}失败{% elif latest_job.status == 'running' %}处理中{% else %}等待启动{% endif %}；最近活动 {{ latest_job.heartbeat_at|date:"Y-m-d H:i" }}。{% if latest_job.error %}{{ latest_job.error }}{% endif %}</p>{% endif %}
+</div>
+<div class="table-wrap"><table><thead><tr><th>仓库</th><th>推荐理由</th><th>Star</th><th>最近代码更新</th><th>AI 评估时间</th><th>操作</th></tr></thead><tbody>
+{% for item in recommendations %}<tr>
+  <td><a href="https://github.com/{{ item.full_name }}" target="_blank" rel="noopener noreferrer">{{ item.full_name }}</a><div class="file-meta"><code>{{ item.skill_path }}</code></div></td>
+  <td>{{ item.recommendation }}</td><td>{{ item.stars }}</td><td>{{ item.repository_pushed_at|date:"Y-m-d"|default:"—" }}</td><td>{{ item.refreshed_at|date:"Y-m-d H:i" }}</td>
+  <td><form method="post" action="{% url 'skills-import-github' %}">{% csrf_token %}<input type="hidden" name="owner" value="{{ item.owner }}"><input type="hidden" name="repository" value="{{ item.repository }}"><input type="hidden" name="path" value="{{ item.skill_path }}"><button class="primary" type="submit">检查许可证并加入候选池</button></form></td>
+</tr>{% empty %}<tr><td colspan="6" class="subtle">尚无推荐。点击刷新后，后台会生成一份新的有限候选列表。</td></tr>{% endfor %}
+</tbody></table></div>
+{% endblock %}
