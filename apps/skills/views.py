@@ -9,7 +9,7 @@ from django.http import Http404, HttpResponse, JsonResponse, StreamingHttpRespon
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.http import content_disposition_header
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_GET, require_POST, require_http_methods
 
 from apps.box_upload.services import LiteratureStorageError
 from apps.box_upload.storage import NAS_WEBDAV
@@ -97,23 +97,46 @@ def featured(request):
 
 @login_required
 @user_passes_test(lambda user: user.is_staff)
-@require_GET
+@require_http_methods(["GET", "POST"])
 def discover_github(request):
-    form = GitHubSkillSearchForm(request.GET or None)
+    submitted = request.POST if request.method == "POST" else None
+    query = request.GET.get("q", "").strip()
+    form = GitHubSkillSearchForm(submitted, initial={"q": query})
     search_result = None
     search_error = ""
     summary_error = ""
-    if request.GET and form.is_valid():
-        page = request.GET.get("page", "1")
+    if request.method == "POST" and form.is_valid():
+        query = form.cleaned_data["q"]
+        page = request.POST.get("page", "1")
         page = int(page) if page.isdecimal() else 1
+        page = min(50, max(1, page))
         try:
-            search_result = search_github_skills(form.cleaned_data["q"], page=page)
+            search_result = search_github_skills(query, page=page)
             summary_error = summarize_github_search_items(search_result["items"])
         except GitHubSearchError as exc:
             search_error = str(exc)
+        request.session["github_skill_search_snapshot"] = {
+            "query": query,
+            "page": page,
+            "search_result": search_result,
+            "search_error": search_error,
+            "summary_error": summary_error,
+        }
+        parameters = {"q": query}
+        if page > 1:
+            parameters["page"] = page
+        return redirect(f"{reverse('skills-discover-github')}?{urlencode(parameters)}")
+    if request.method == "GET" and query:
+        page = request.GET.get("page", "1")
+        page = int(page) if page.isdecimal() else 1
+        snapshot = request.session.get("github_skill_search_snapshot", {})
+        if snapshot.get("query") == query and snapshot.get("page") == page:
+            search_result = snapshot.get("search_result")
+            search_error = snapshot.get("search_error", "")
+            summary_error = snapshot.get("summary_error", "")
     return render(request, "skills/discover_github.html", {
         "form": form,
-        "query": form.data.get("q", "") if form.is_bound else "",
+        "query": query,
         "search_result": search_result,
         "search_error": search_error,
         "summary_error": summary_error,

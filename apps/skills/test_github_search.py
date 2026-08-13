@@ -395,7 +395,7 @@ class GitHubSearchPageTests(TestCase):
         self.client.force_login(self.staff)
 
         self.assertEqual(self.client.get("/skills/discover/github/").status_code, 200)
-        response = self.client.get("/skills/discover/github/?q=a")
+        response = self.client.post("/skills/discover/github/", {"q": "a"})
 
         self.assertContains(response, "关键词至少需要 2 个字符")
         search.assert_not_called()
@@ -425,7 +425,13 @@ class GitHubSearchPageTests(TestCase):
         }) or ""
         self.client.force_login(self.staff)
 
-        response = self.client.get("/skills/discover/github/?q=literature")
+        submitted = self.client.post("/skills/discover/github/", {"q": "literature"})
+        self.assertRedirects(
+            submitted,
+            "/skills/discover/github/?q=literature",
+            fetch_redirect_response=False,
+        )
+        response = self.client.get(submitted.url)
 
         self.assertContains(response, "example/research")
         self.assertContains(response, "skills/paper/SKILL.md")
@@ -437,6 +443,54 @@ class GitHubSearchPageTests(TestCase):
         self.assertContains(response, "检查许可证并加入候选池")
         search.assert_called_once_with("literature", page=1)
         summarize.assert_called_once()
+
+        refreshed = self.client.get(submitted.url)
+        self.assertContains(refreshed, "example/research")
+        search.assert_called_once()
+        summarize.assert_called_once()
+
+    @patch("apps.skills.views.summarize_github_search_items")
+    @patch("apps.skills.views.search_github_skills")
+    def test_only_search_and_pagination_posts_call_github(self, search, summarize):
+        search.side_effect = [
+            {
+                "items": [], "total_count": 45, "incomplete_results": False,
+                "page": 1, "pages": 3,
+            },
+            {
+                "items": [], "total_count": 45, "incomplete_results": False,
+                "page": 2, "pages": 3,
+            },
+        ]
+        summarize.return_value = ""
+        self.client.force_login(self.staff)
+
+        first = self.client.post("/skills/discover/github/", {"q": "literature"})
+        self.assertEqual(first.status_code, 302)
+        page = self.client.get(first.url)
+        self.assertContains(page, 'method="post"')
+        self.assertContains(page, 'name="page" value="2"')
+
+        unrelated = self.client.get("/skills/discover/github/?q=physics&page=2")
+        self.assertNotContains(unrelated, "45 个匹配")
+        self.assertEqual(search.call_count, 1)
+
+        second = self.client.post(
+            "/skills/discover/github/",
+            {"q": "literature", "page": "2"},
+        )
+        self.assertRedirects(
+            second,
+            "/skills/discover/github/?q=literature&page=2",
+            fetch_redirect_response=False,
+        )
+        self.client.get(second.url)
+        self.client.get(second.url)
+
+        self.assertEqual(search.call_count, 2)
+        search.assert_any_call("literature", page=1)
+        search.assert_any_call("literature", page=2)
+        self.assertEqual(summarize.call_count, 2)
 
     @patch("apps.skills.views.launch_scan_job")
     @patch("apps.skills.views.inspect_github_skill_for_import")
