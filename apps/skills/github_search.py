@@ -1,7 +1,10 @@
+import base64
+import binascii
 import hashlib
 import json
 import os
 import re
+import secrets
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import PurePosixPath
@@ -15,6 +18,12 @@ from django.utils.dateparse import parse_datetime
 from django.utils.text import slugify
 
 from .models import GitHubSkillSource
+from .ai_enrichment import (
+    SkillEnrichmentError,
+    discovery_assessment_cache_fingerprint,
+    ensure_deepseek_available,
+    generate_skill_discovery_assessments,
+)
 
 
 GITHUB_API_URL = "https://api.github.com"
@@ -22,6 +31,11 @@ SEARCH_PAGE_SIZE = 20
 SEARCH_CACHE_SECONDS = 180
 REPOSITORY_CACHE_SECONDS = 1800
 REPOSITORY_METADATA_WORKERS = 4
+DISCOVERY_DOCUMENT_WORKERS = 4
+DISCOVERY_ASSESSMENT_CACHE_SECONDS = 604800
+DISCOVERY_FAILURE_CACHE_SECONDS = 60
+DISCOVERY_LOCK_SECONDS = 180
+MAX_DISCOVERY_BLOB_BYTES = 524288
 REPOSITORY_PART_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,100}\Z")
 
 
@@ -160,6 +174,151 @@ def _repository_metadata(full_name):
     result = {"stars": stars, "pushed_at": pushed_at, "archived": bool(payload.get("archived"))}
     cache.set(cache_key, result, REPOSITORY_CACHE_SECONDS)
     return result
+
+
+def summarize_github_search_items(items):
+    for item in items:
+        item["summary"] = ""
+        item["academic_recommended"] = False
+    by_sha = {}
+    for item in items:
+        blob_sha = str(item.get("blob_sha") or "")
+        if re.fullmatch(r"[0-9a-f]{40,64}", blob_sha):
+            by_sha.setdefault(blob_sha, item)
+    if not by_sha:
+        return ""
+
+    fingerprint = discovery_assessment_cache_fingerprint()
+    cache_keys = {
+        blob_sha: "github-skill-assessment:" + hashlib.sha256(
+            f"{blob_sha}\0{fingerprint}".encode()
+        ).hexdigest()
+        for blob_sha in by_sha
+    }
+    cached = cache.get_many(cache_keys.values())
+    assessments = {}
+    missing = {}
+    for blob_sha, item in by_sha.items():
+        assessment = cached.get(cache_keys[blob_sha])
+        if _valid_cached_assessment(assessment):
+            assessments[blob_sha] = assessment
+        else:
+            missing[blob_sha] = item
+
+    try:
+        ensure_deepseek_available()
+    except SkillEnrichmentError:
+        missing = {}
+    acquired = False
+    lock_token = ""
+    failure_key = ""
+    lock_key = ""
+    if missing:
+        batch_digest = hashlib.sha256(
+            (fingerprint + "\0" + "\0".join(sorted(missing))).encode()
+        ).hexdigest()
+        failure_key = f"github-skill-assessment-failure:{batch_digest}"
+        lock_key = f"github-skill-assessment-lock:{batch_digest}"
+        lock_token = secrets.token_hex(16)
+        acquired = not cache.get(failure_key) and cache.add(lock_key, lock_token, DISCOVERY_LOCK_SECONDS)
+        if not acquired:
+            missing = {}
+    documents = _discovery_documents(missing)
+    generated = {}
+    if documents:
+        try:
+            generated = generate_skill_discovery_assessments([
+                {"id": blob_sha, "document": documents[blob_sha]}
+                for blob_sha in missing
+                if blob_sha in documents
+            ])
+        except SkillEnrichmentError:
+            cache.set(failure_key, True, DISCOVERY_FAILURE_CACHE_SECONDS)
+        if generated:
+            assessments.update(generated)
+            cache.set_many(
+                {cache_keys[blob_sha]: assessment for blob_sha, assessment in generated.items()},
+                DISCOVERY_ASSESSMENT_CACHE_SECONDS,
+            )
+    if acquired:
+        if cache.get(lock_key) == lock_token:
+            cache.delete(lock_key)
+
+    for item in items:
+        assessment = assessments.get(item.get("blob_sha"))
+        if assessment:
+            item.update({
+                "summary": assessment["summary"],
+                "academic_recommended": assessment["academic_recommended"],
+                "summary_model": assessment["model"],
+                "summary_prompt_version": assessment["prompt_version"],
+            })
+    if any(not item["summary"] for item in items):
+        return "部分 AI 摘要暂不可用；GitHub 查看和候选导入不受影响。"
+    return ""
+
+
+def _discovery_documents(items_by_sha):
+    if not items_by_sha:
+        return {}
+    items_by_sha = {
+        blob_sha: item
+        for blob_sha, item in items_by_sha.items()
+        if not cache.get(f"github-skill-document-failure:{blob_sha}")
+    }
+    if not items_by_sha:
+        return {}
+    documents = {}
+    with ThreadPoolExecutor(max_workers=min(DISCOVERY_DOCUMENT_WORKERS, len(items_by_sha))) as executor:
+        futures = {
+            executor.submit(_github_blob_document, item): blob_sha
+            for blob_sha, item in items_by_sha.items()
+        }
+        for future in as_completed(futures):
+            try:
+                documents[futures[future]] = future.result()
+            except (GitHubSearchError, TypeError, ValueError, binascii.Error, UnicodeError):
+                cache.set(
+                    f"github-skill-document-failure:{futures[future]}",
+                    True,
+                    DISCOVERY_FAILURE_CACHE_SECONDS,
+                )
+                continue
+    return documents
+
+
+def _github_blob_document(item):
+    owner = item["owner"]
+    repository = item["repository"]
+    blob_sha = item["blob_sha"]
+    if not _valid_repository_part(owner) or not _valid_repository_part(repository):
+        raise ValueError("Invalid repository name.")
+    document_cache_key = f"github-skill-document:{blob_sha}"
+    cached = cache.get(document_cache_key)
+    if isinstance(cached, str):
+        return cached
+    payload = _request_json(
+        f"/repos/{quote(owner, safe='')}/{quote(repository, safe='')}/git/blobs/{quote(blob_sha, safe='')}"
+    )
+    if payload.get("encoding") != "base64" or int(payload.get("size", 0)) > MAX_DISCOVERY_BLOB_BYTES:
+        raise ValueError("GitHub blob is not a supported SKILL.md document.")
+    encoded = re.sub(r"\s+", "", str(payload.get("content") or ""))
+    raw = base64.b64decode(encoded, validate=True)
+    if len(raw) > MAX_DISCOVERY_BLOB_BYTES:
+        raise ValueError("GitHub blob is too large.")
+    document = raw.decode("utf-8-sig")
+    cache.set(document_cache_key, document, DISCOVERY_ASSESSMENT_CACHE_SECONDS)
+    return document
+
+
+def _valid_cached_assessment(value):
+    return (
+        isinstance(value, dict)
+        and bool(value.get("summary"))
+        and isinstance(value.get("academic_recommended"), bool)
+        and bool(value.get("model"))
+        and bool(value.get("prompt_version"))
+    )
 
 
 def inspect_github_skill_for_import(owner, repository, skill_path):
