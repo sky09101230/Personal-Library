@@ -12,10 +12,11 @@
       <div id="progress" class="progress-wrap" aria-live="polite">
         <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
         <div class="progress-label"><span id="progress-status">Preparing files</span><span id="progress-percent">0%</span></div>
+        <ol id="upload-results" class="upload-results" aria-live="polite"></ol>
       </div>
     </form>
   </div>
-  <aside class="side-note"><strong>处理边界</strong><p>相同 DOI 只保留一篇文献和一份 PDF；其他用户会关联到该文献，但不会获得附件审核或删除权限。</p><p>发现 DOI 时会在写入 NAS 前预检 BibTeX；失败将停止本次上传。没有 DOI 不受影响。</p></aside>
+  <aside class="side-note"><strong>处理边界</strong><p>相同 DOI 只保留一篇文献和一份 PDF；其他用户会关联到该文献，但不会获得附件审核或删除权限。</p><p>每个文件单独处理；发现 DOI 时会在写入 NAS 前预检 BibTeX，失败文件不会写入。</p></aside>
 </div>
 <script>
 (() => {
@@ -25,39 +26,88 @@
   const bar = document.getElementById('progress-bar');
   const status = document.getElementById('progress-status');
   const percent = document.getElementById('progress-percent');
-  form.addEventListener('submit', (event) => {
-    event.preventDefault();
+  const results = document.getElementById('upload-results');
+  const csrfToken = form.querySelector('[name="csrfmiddlewaretoken"]').value;
+
+  const appendResult = (kind, message) => {
+    const item = document.createElement('li');
+    item.className = `upload-result ${kind}`;
+    item.textContent = message;
+    results.appendChild(item);
+  };
+
+  const uploadFile = (file, index, total, completed) => new Promise((resolve) => {
     const request = new XMLHttpRequest();
     request.open('POST', form.action || window.location.pathname);
     request.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
     request.timeout = 900000;
-    submit.disabled = true;
-    progress.classList.add('active');
-    progress.classList.remove('error');
-    status.textContent = 'Sending files to the workspace';
     request.upload.onprogress = (event) => {
       if (!event.lengthComputable) return;
       const value = Math.round((event.loaded / event.total) * 100);
-      bar.style.width = `${value}%`;
-      percent.textContent = `${value}%`;
-      if (value === 100) { status.textContent = 'Checking metadata before NAS storage'; percent.textContent = 'Processing'; bar.style.width = ''; bar.classList.add('indeterminate'); }
+      const overall = Math.round(((completed + value / 100) / total) * 100);
+      bar.style.width = `${overall}%`;
+      percent.textContent = `${overall}%`;
+      status.textContent = `正在处理第 ${index + 1}/${total} 篇：${file.name} · 上传文件`;
+      if (value === 100) {
+        status.textContent = `正在处理第 ${index + 1}/${total} 篇：${file.name} · 服务端解析与存储`;
+        bar.style.width = '';
+        bar.classList.add('indeterminate');
+      }
     };
     request.onload = () => {
       let result = {};
-      try { result = JSON.parse(request.responseText); } catch (error) { result = { ok: false, message: 'Unexpected server response.' }; }
-      if (request.status >= 200 && request.status < 300 && result.ok) {
-        bar.classList.remove('indeterminate'); bar.style.width = '100%'; percent.textContent = '100%'; status.textContent = result.notice || `Completed ${result.count} file(s)`;
-        if (result.notice) { window.alert(result.notice); }
-        window.setTimeout(() => { window.location.href = '{% url "library" %}'; }, 700);
-      } else {
-        bar.classList.remove('indeterminate'); status.textContent = result.message || 'Upload failed'; percent.textContent = '';
-        progress.classList.add('error'); submit.disabled = false;
-        if (result.code === 'doi_bibtex_preflight_failed') { window.alert(result.message); }
-      }
+      try { result = JSON.parse(request.responseText); } catch (error) { result = {}; }
+      resolve({
+        ...result,
+        ok: request.status >= 200 && request.status < 300 && result.ok,
+        message: result.message || `服务器返回 HTTP ${request.status}`,
+      });
     };
-    request.onerror = () => { status.textContent = 'Network error'; submit.disabled = false; bar.classList.remove('indeterminate'); };
-    request.ontimeout = () => { status.textContent = 'NJU Box did not respond within 15 minutes'; percent.textContent = ''; submit.disabled = false; bar.classList.remove('indeterminate'); };
-    request.send(new FormData(form));
+    request.onerror = () => resolve({ ok: false, stage: '网络', message: '网络连接失败' });
+    request.ontimeout = () => resolve({ ok: false, stage: '网络', message: '服务器处理超时（15 分钟）' });
+    const data = new FormData();
+    data.append('csrfmiddlewaretoken', csrfToken);
+    data.append('files', file, file.name);
+    request.send(data);
+  });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const files = Array.from(form.querySelector('[name="files"]').files || []);
+    if (!files.length) return;
+    submit.disabled = true;
+    progress.classList.add('active');
+    progress.classList.remove('error');
+    results.replaceChildren();
+    bar.classList.remove('indeterminate');
+    bar.style.width = '0%';
+    percent.textContent = '0%';
+    let uploaded = 0;
+    let merged = 0;
+    let skipped = 0;
+    let failures = 0;
+    for (let index = 0; index < files.length; index += 1) {
+      const file = files[index];
+      status.textContent = `正在处理第 ${index + 1}/${files.length} 篇：${file.name} · 准备上传`;
+      const result = await uploadFile(file, index, files.length, index);
+      bar.classList.remove('indeterminate');
+      if (result.ok) {
+        uploaded += result.count || 0;
+        merged += result.merged || 0;
+        skipped += result.skipped || 0;
+        appendResult('success', result.notice || `${file.name}：处理成功`);
+      } else {
+        failures += 1;
+        appendResult('error', result.message || `${file.name}：处理失败`);
+      }
+      const completed = index + 1;
+      bar.style.width = `${Math.round((completed / files.length) * 100)}%`;
+      percent.textContent = `${Math.round((completed / files.length) * 100)}%`;
+    }
+    const summary = `批量处理完成：新增 ${uploaded} 篇，关联 ${merged} 篇，跳过 ${skipped} 篇，失败 ${failures} 篇`;
+    status.textContent = summary;
+    if (failures) progress.classList.add('error');
+    submit.disabled = false;
   });
 })();
 </script>

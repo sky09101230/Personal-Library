@@ -51,7 +51,12 @@
     .progress-bar { width: 0; height: 100%; background: var(--accent); transition: width .15s ease; }
     .progress-bar.indeterminate { width: 35%; animation: slide 1.2s infinite ease-in-out; }
     @keyframes slide { from { transform: translateX(-110%); } to { transform: translateX(310%); } }
-    .progress-label { display: flex; justify-content: space-between; margin-top: 8px; color: var(--muted); font-size: 13px; }
+    .progress-label { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-top: 8px; color: var(--muted); font-size: 13px; }
+    .progress-label span:first-child { min-width: 0; overflow-wrap: anywhere; }
+    .upload-results { margin: 14px 0 0; padding-left: 20px; font-size: 13px; }
+    .upload-result { margin: 5px 0; overflow-wrap: anywhere; }
+    .upload-result.success { color: var(--ok); }
+    .upload-result.error { color: var(--danger); }
     .notice { margin-bottom: 18px; padding: 12px 14px; border-left: 3px solid var(--accent); background: #fff; }
     .notice.error { border-color: var(--danger); color: var(--danger); }
     .errorlist { margin: 7px 0 0; padding-left: 18px; color: var(--danger); }

@@ -112,22 +112,31 @@ def upload(request):
             merged_count = 0
             skipped_count = 0
             duplicate_notices = []
+            current_filename = ""
+            current_stage = ""
             try:
                 prepared_files = []
                 prefetched_bibtex = {}
                 for uploaded_file in form.cleaned_data["files"]:
+                    current_filename = uploaded_file.name
+                    current_stage = "PDF 校验"
                     prepared = prepare_pdf(uploaded_file)
+                    current_stage = "PDF metadata 提取"
                     evidence = extract_pdf_evidence(prepared.uploaded_file)
                     doi = normalize_doi(evidence["doi"])
                     if len(evidence.get("doi_candidates") or []) > 1:
+                        current_stage = "DOI 识别"
                         doi, bibtex = select_pdf_doi(evidence, bibtex_fetcher=fetch_doi_bibtex)
                         prefetched_bibtex[doi] = bibtex
                     doi_existing = CanonicalDocument.objects.filter(doi__iexact=doi).first() if doi else None
                     if doi and doi_existing is None and doi not in prefetched_bibtex:
+                        current_stage = "DOI BibTeX 预检"
                         prefetched_bibtex[doi] = fetch_doi_bibtex(doi)
                     prepared_files.append((prepared, doi))
 
                 for prepared, doi in prepared_files:
+                    current_filename = prepared.filename
+                    current_stage = "检查重复"
                     doi_existing = None
                     if doi:
                         doi_existing = CanonicalDocument.objects.filter(doi__iexact=doi).first()
@@ -168,6 +177,7 @@ def upload(request):
                                     f"{prepared.filename}：文献已存在，已关联到我的文献，未重复保存 PDF"
                                 )
                             continue
+                    current_stage = "NAS 存储"
                     upload_record = save_pdf_upload(
                         canonical,
                         request.user,
@@ -198,12 +208,9 @@ def upload(request):
             except (LiteratureStorageError, MetadataResolutionError, PdfValidationError) as exc:
                 preflight_failed = isinstance(exc, MetadataResolutionError)
                 invalid_pdf = isinstance(exc, PdfValidationError)
-                if preflight_failed:
-                    message = f"DOI BibTeX 预检失败，已停止上传：{exc}"
-                elif invalid_pdf:
-                    message = f"PDF 校验失败，已停止上传：{exc}"
-                else:
-                    message = f"已上传 {len(remote_paths)} 个文件后失败：{exc}"
+                message = f"{current_filename or '未知文件'}：{current_stage or '处理'}失败：{exc}"
+                if remote_paths:
+                    message += f"（此前已完成 {len(remote_paths)} 篇）"
                 if is_ajax:
                     return JsonResponse({
                         "ok": False,
@@ -212,6 +219,8 @@ def upload(request):
                             if preflight_failed
                             else "invalid_pdf" if invalid_pdf else "upload_failed"
                         ),
+                        "filename": current_filename,
+                        "stage": current_stage,
                         "message": message,
                     }, status=400)
                 form.add_error(None, message)
@@ -220,6 +229,7 @@ def upload(request):
                 if is_ajax:
                     return JsonResponse({
                         "ok": True,
+                        "filename": current_filename,
                         "count": len(remote_paths),
                         "merged": merged_count,
                         "skipped": skipped_count,
@@ -234,7 +244,16 @@ def upload(request):
         elif is_ajax:
             file_errors = form.errors.get("files")
             message = str(file_errors[0]) if file_errors else "请选择至少一个 PDF 文件。"
-            return JsonResponse({"ok": False, "message": message}, status=400)
+            files = request.FILES.getlist("files")
+            filename = files[0].name if files else ""
+            if filename:
+                message = f"{filename}：请求校验失败：{message}"
+            return JsonResponse({
+                "ok": False,
+                "filename": filename,
+                "stage": "请求校验",
+                "message": message,
+            }, status=400)
     else:
         form = BoxUploadForm()
     return render(request, "box_upload/upload.html", {"form": form})

@@ -41,8 +41,9 @@ class UploadPageTests(TestCase):
         response = self.client.get("/upload/")
         self.assertContains(response, "PLAB Literature")
         self.assertContains(response, 'multiple')
-        self.assertContains(response, "window.alert(result.message)")
-        self.assertContains(response, "window.alert(result.notice)")
+        self.assertContains(response, "upload-results")
+        self.assertContains(response, "正在处理第 ${index + 1}/${files.length} 篇")
+        self.assertNotContains(response, "window.alert(result.message)")
         self.assertContains(response, "progress.classList.remove('error')")
 
     @patch.dict("os.environ", {
@@ -84,6 +85,7 @@ class UploadPageTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["count"], 1)
+        self.assertEqual(response.json()["filename"], "progress.pdf")
 
     @patch("apps.box_upload.views.store_literature")
     @patch("apps.box_upload.views.fetch_doi_bibtex", side_effect=[
@@ -106,7 +108,10 @@ class UploadPageTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["code"], "doi_bibtex_preflight_failed")
-        self.assertIn("已停止上传", response.json()["message"])
+        self.assertEqual(response.json()["filename"], "two.pdf")
+        self.assertEqual(response.json()["stage"], "DOI BibTeX 预检")
+        self.assertIn("two.pdf", response.json()["message"])
+        self.assertIn("DOI BibTeX 预检失败", response.json()["message"])
         self.assertEqual(extract_evidence.call_count, 2)
         self.assertEqual(fetch_bibtex.call_count, 2)
         store.assert_not_called()
@@ -157,6 +162,9 @@ class UploadPageTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["filename"], "notes.txt")
+        self.assertEqual(response.json()["stage"], "请求校验")
+        self.assertIn("notes.txt", response.json()["message"])
         self.assertIn("PDF", response.json()["message"])
 
     @patch("apps.box_upload.views.store_literature")
@@ -169,6 +177,9 @@ class UploadPageTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["code"], "invalid_pdf")
+        self.assertEqual(response.json()["filename"], "fake.pdf")
+        self.assertEqual(response.json()["stage"], "PDF 校验")
+        self.assertIn("fake.pdf", response.json()["message"])
         store.assert_not_called()
         self.assertFalse(UploadedDocument.objects.exists())
 
