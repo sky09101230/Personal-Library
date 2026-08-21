@@ -53,6 +53,14 @@
     @keyframes slide { from { transform: translateX(-110%); } to { transform: translateX(310%); } }
     .progress-label { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-top: 8px; color: var(--muted); font-size: 13px; }
     .progress-label span:first-child { min-width: 0; overflow-wrap: anywhere; }
+    .upload-active { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 14px 0 0; padding: 0; list-style: none; }
+    .upload-channel { min-width: 0; padding: 8px 9px; border: 1px solid var(--line); border-radius: 4px; background: #fafbfc; }
+    .upload-channel strong, .upload-channel span { display: block; overflow-wrap: anywhere; }
+    .upload-channel strong { color: var(--ink); font-size: 12px; }
+    .upload-channel span { margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .upload-channel-track { height: 4px; margin-top: 7px; overflow: hidden; border-radius: 4px; background: #e8eaf0; }
+    .upload-channel-bar { width: 0; height: 100%; background: var(--accent); transition: width .15s ease; }
+    .upload-channel-bar.indeterminate { width: 35%; animation: slide 1.2s infinite ease-in-out; }
     .upload-results { margin: 14px 0 0; padding-left: 20px; font-size: 13px; }
     .upload-result { margin: 5px 0; overflow-wrap: anywhere; }
     .upload-result.success { color: var(--ok); }
@@ -201,7 +209,7 @@
     .sync-progress .progress-track { margin-top: 9px; }
     .sync-progress p { margin: 8px 0 0; }
     .sync-progress-count { color: var(--muted); font-size: 12px; }
-    @media (max-width: 720px) { .topbar { position: static; height: auto; min-height: 72px; gap: 10px; padding: 12px 18px; } .nav { flex-wrap: wrap; justify-content: flex-end; } .nav-user { display: none; } .content, .content-wide { width: min(100% - 28px, 620px); margin: 28px auto; } .upload-grid, .review-grid { grid-template-columns: 1fr; } .side-note { border-left: 0; border-top: 1px solid var(--line); padding: 18px 0 0; } .library-summary { overflow-x: auto; } .library-stat { min-width: 145px; } .library-search-controls, .skills-sync-form { align-items: stretch; flex-wrap: wrap; } .library-search-controls input, .library-search-controls select, .skills-sync-form select { flex: 1 1 100%; width: 100%; } .skills-sync-form label { flex-basis: 100%; margin-bottom: -3px; } }
+    @media (max-width: 720px) { .topbar { position: static; height: auto; min-height: 72px; gap: 10px; padding: 12px 18px; } .nav { flex-wrap: wrap; justify-content: flex-end; } .nav-user { display: none; } .content, .content-wide { width: min(100% - 28px, 620px); margin: 28px auto; } .upload-grid, .review-grid { grid-template-columns: 1fr; } .upload-active { grid-template-columns: 1fr; } .side-note { border-left: 0; border-top: 1px solid var(--line); padding: 18px 0 0; } .library-summary { overflow-x: auto; } .library-stat { min-width: 145px; } .library-search-controls, .skills-sync-form { align-items: stretch; flex-wrap: wrap; } .library-search-controls input, .library-search-controls select, .skills-sync-form select { flex: 1 1 100%; width: 100%; } .skills-sync-form label { flex-basis: 100%; margin-bottom: -3px; } }
   </style>
 </head>
 <body>

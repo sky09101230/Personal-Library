@@ -39,176 +39,41 @@ class UploadPageTests(TestCase):
         response = self.client.get("/upload/")
         self.assertContains(response, "PLAB Literature")
         self.assertContains(response, 'multiple')
-        self.assertContains(response, "upload-results")
-        self.assertContains(response, "正在处理第 ${index + 1}/${files.length} 篇")
-        self.assertNotContains(response, "window.alert(result.message)")
-        self.assertContains(response, "progress.classList.remove('error')")
+        self.assertContains(response, "const MAX_CHANNELS = 4")
+        self.assertContains(response, "本批 metadata 审核")
 
-    @patch.dict("os.environ", {
-        "NJU_BOX_API_TOKEN": "env-token",
-        "NJU_BOX_LIBRARY_PASSWORD": "env-password",
-    }, clear=False)
-    def test_configured_credentials_are_not_shown(self):
-        response = self.client.get("/upload/")
-        self.assertNotContains(response, "NJU Box Web API Token")
-        self.assertNotContains(response, "PLAB Literature 加密密码")
+    def test_library_preserves_historical_supplementary_role(self):
+        canonical = CanonicalDocument.objects.create(title="Existing paper", sha256="a" * 64)
+        for name, digest, role in (
+            ("primary.pdf", "a" * 64, UploadedDocument.FileRole.PRIMARY),
+            ("supplement.pdf", "b" * 64, UploadedDocument.FileRole.SUPPLEMENTARY),
+        ):
+            UploadedDocument.objects.create(
+                canonical_document=canonical,
+                uploader=self.user,
+                original_name=name,
+                remote_path=f"/{name}",
+                sha256=digest,
+                size=1,
+                file_role=role,
+            )
 
-    @patch("apps.box_upload.views.store_literature", side_effect=[
-        StoredLiteratureObject(NAS_WEBDAV, "/public/PLAB_KnowledgeBase/Literature/one.pdf"),
-        StoredLiteratureObject(NAS_WEBDAV, "/public/PLAB_KnowledgeBase/Literature/two.pdf"),
-    ])
-    def test_post_uploads_all_selected_files(self, upload_file):
-        response = self.client.post("/upload/", data={
-            "files": [
-                SimpleUploadedFile("one.pdf", b"%PDF-1.7\none"),
-                SimpleUploadedFile("two.pdf", b"%PDF-1.7\ntwo"),
-            ],
-        })
+        response = self.client.get("/library/")
 
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(upload_file.call_count, 2)
-        self.assertEqual(UploadedDocument.objects.filter(storage_backend=NAS_WEBDAV).count(), 2)
-        self.assertFalse(CanonicalDocument.objects.exclude(index_status=CanonicalDocument.IndexStatus.PUBLISHED).exists())
-
-    @patch(
-        "apps.box_upload.views.store_literature",
-        return_value=StoredLiteratureObject(NAS_WEBDAV, "/public/PLAB_KnowledgeBase/Literature/progress.pdf"),
-    )
-    def test_ajax_upload_returns_progress_result(self, upload_file):
-        response = self.client.post(
-            "/upload/",
-            data={"files": [SimpleUploadedFile("progress.pdf", b"%PDF-1.7\npdf")]},
-            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["count"], 1)
-        self.assertEqual(response.json()["filename"], "progress.pdf")
-
-    @patch("apps.box_upload.views.store_literature")
-    @patch("apps.box_upload.views.fetch_doi_bibtex", side_effect=[
-        "@article{one, title={One}, doi={10.1000/one}}",
-        MetadataResolutionError("DOI BibTeX lookup failed."),
-    ])
-    @patch("apps.box_upload.views.extract_pdf_evidence", side_effect=[
-        {"doi": "10.1000/one"},
-        {"doi": "10.1000/two"},
-    ])
-    def test_bibtex_preflight_failure_stops_batch_before_storage(self, extract_evidence, fetch_bibtex, store):
-        response = self.client.post(
-            "/upload/",
-            data={"files": [
-                SimpleUploadedFile("one.pdf", b"%PDF-1.7\none"),
-                SimpleUploadedFile("two.pdf", b"%PDF-1.7\ntwo"),
-            ]},
-            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["code"], "doi_bibtex_preflight_failed")
-        self.assertEqual(response.json()["filename"], "two.pdf")
-        self.assertEqual(response.json()["stage"], "DOI BibTeX 预检")
-        self.assertIn("two.pdf", response.json()["message"])
-        self.assertIn("DOI BibTeX 预检失败", response.json()["message"])
-        self.assertEqual(extract_evidence.call_count, 2)
-        self.assertEqual(fetch_bibtex.call_count, 2)
-        store.assert_not_called()
-        self.assertEqual(UploadedDocument.objects.count(), 0)
-
-    @patch("apps.box_upload.views.resolve_pdf_metadata_safely")
-    @patch("apps.box_upload.views.store_literature", return_value=StoredLiteratureObject(
-        NAS_WEBDAV,
-        "/public/PLAB_KnowledgeBase/Literature/doi.pdf",
-    ))
-    @patch("apps.box_upload.views.fetch_doi_bibtex", return_value="@article{doi, title={DOI}, doi={10.1000/doi}}")
-    @patch("apps.box_upload.views.extract_pdf_evidence", return_value={"doi": "10.1000/doi"})
-    def test_successful_bibtex_preflight_is_reused(self, extract_evidence, fetch_bibtex, store, resolve_metadata):
-        response = self.client.post(
-            "/upload/",
-            data={"files": [SimpleUploadedFile("doi.pdf", b"%PDF-1.7\ndoi")]},
-            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
-        )
-
-        self.assertEqual(response.status_code, 200)
-        store.assert_called_once()
-        fetch_bibtex.assert_called_once_with("10.1000/doi")
-        bibtex_fetcher = resolve_metadata.call_args.kwargs["bibtex_fetcher"]
-        self.assertEqual(bibtex_fetcher("10.1000/doi"), "@article{doi, title={DOI}, doi={10.1000/doi}}")
-
-    @patch("apps.box_upload.views.fetch_doi_bibtex")
-    @patch("apps.box_upload.views.extract_pdf_evidence", return_value={"doi": None})
-    @patch("apps.box_upload.views.store_literature", return_value=StoredLiteratureObject(
-        NAS_WEBDAV,
-        "/public/PLAB_KnowledgeBase/Literature/no-doi.pdf",
-    ))
-    def test_pdf_without_doi_skips_bibtex_preflight(self, store, extract_evidence, fetch_bibtex):
-        response = self.client.post(
-            "/upload/",
-            data={"files": [SimpleUploadedFile("no-doi.pdf", b"%PDF-1.7\nno doi")]},
-            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
-        )
-
-        self.assertEqual(response.status_code, 200)
-        store.assert_called_once()
-        fetch_bibtex.assert_not_called()
-
-    def test_browser_upload_rejects_non_pdf_files(self):
-        response = self.client.post(
-            "/upload/",
-            data={"files": [SimpleUploadedFile("notes.txt", b"not a pdf")]},
-            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["filename"], "notes.txt")
-        self.assertEqual(response.json()["stage"], "请求校验")
-        self.assertIn("notes.txt", response.json()["message"])
-        self.assertIn("PDF", response.json()["message"])
-
-    @patch("apps.box_upload.views.store_literature")
-    def test_browser_upload_rejects_invalid_pdf_content_before_storage(self, store):
-        response = self.client.post(
-            "/upload/",
-            data={"files": [SimpleUploadedFile("fake.pdf", b"not a pdf")]},
-            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["code"], "invalid_pdf")
-        self.assertEqual(response.json()["filename"], "fake.pdf")
-        self.assertEqual(response.json()["stage"], "PDF 校验")
-        self.assertIn("fake.pdf", response.json()["message"])
-        store.assert_not_called()
-        self.assertFalse(UploadedDocument.objects.exists())
-
-    @override_settings(MCP_MAX_UPLOAD_BYTES=12)
-    @patch("apps.box_upload.views.store_literature")
-    def test_browser_upload_rejects_oversized_pdf_before_storage(self, store):
-        response = self.client.post(
-            "/upload/",
-            data={"files": [SimpleUploadedFile("large.pdf", b"%PDF-1.7\nlarge")]},
-            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["code"], "invalid_pdf")
-        store.assert_not_called()
-        self.assertFalse(UploadedDocument.objects.exists())
+        self.assertContains(response, "正文 PDF · 提交者：member")
+        self.assertContains(response, "补充材料 · 提交者：member")
 
     @patch("apps.box_upload.ingestion.get_literature_storage")
     @patch("apps.box_upload.ingestion.UploadedDocument.objects.create", side_effect=RuntimeError("db failed"))
-    @patch(
-        "apps.box_upload.views.store_literature",
-        return_value=StoredLiteratureObject(NAS_WEBDAV, "/cleanup/web.pdf"),
-    )
     def test_shared_ingestion_removes_stored_pdf_when_database_write_fails(
-        self, store, create_upload, get_storage
+        self, create_upload, get_storage
     ):
+        canonical = CanonicalDocument.objects.create()
+        prepared = prepare_pdf(SimpleUploadedFile("cleanup.pdf", b"%PDF-1.7\ncleanup"))
+        store = MagicMock(return_value=StoredLiteratureObject(NAS_WEBDAV, "/cleanup/web.pdf"))
+
         with self.assertRaises(RuntimeError):
-            self.client.post(
-                "/upload/",
-                data={"files": [SimpleUploadedFile("cleanup.pdf", b"%PDF-1.7\ncleanup")]},
-            )
+            save_pdf_upload(canonical, self.user, prepared, store_file=store)
 
         store.assert_called_once()
         create_upload.assert_called_once()
@@ -243,101 +108,22 @@ class UploadPageTests(TestCase):
         self.assertTrue(canonical.uploaders.filter(pk=self.user.pk).exists())
         get_storage.return_value.delete.assert_called_once_with("/cleanup/racing.pdf")
 
-    @patch("apps.box_upload.views.store_literature", side_effect=[
-        StoredLiteratureObject(NAS_WEBDAV, "/public/PLAB_KnowledgeBase/Literature/duplicate-1.pdf"),
-        StoredLiteratureObject(NAS_WEBDAV, "/public/PLAB_KnowledgeBase/Literature/duplicate-2.pdf"),
-    ])
-    def test_same_content_reuses_canonical_document(self, upload_file):
-        response = self.client.post("/upload/", data={
-            "files": [
-                SimpleUploadedFile("first.pdf", b"%PDF-1.7\nsame-content"),
-                SimpleUploadedFile("second.pdf", b"%PDF-1.7\nsame-content"),
-            ],
-        })
+    def test_library_hides_historical_exact_duplicate_attachments(self):
+        canonical = CanonicalDocument.objects.create(title="Duplicate attachment paper", sha256="d" * 64)
+        for index in range(2):
+            UploadedDocument.objects.create(
+                canonical_document=canonical,
+                uploader=self.user,
+                original_name="duplicate.pdf",
+                remote_path=f"/duplicate-{index}.pdf",
+                sha256="d" * 64,
+                size=1,
+            )
 
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(CanonicalDocument.objects.count(), 1)
-        self.assertEqual(UploadedDocument.objects.count(), 2)
-        self.assertEqual(CanonicalDocument.objects.get().index_status, CanonicalDocument.IndexStatus.PUBLISHED)
-        self.assertEqual(
-            UploadedDocument.objects.filter(duplicate_type=UploadedDocument.DuplicateType.EXACT).count(),
-            1,
-        )
+        response = self.client.get("/library/")
 
-    @patch(
-        "apps.box_upload.views.store_literature",
-        return_value=StoredLiteratureObject(NAS_WEBDAV, "/public/PLAB_KnowledgeBase/Literature/existing.pdf"),
-    )
-    def test_duplicate_upload_publishes_existing_canonical(self, store):
-        content = b"%PDF-1.7\nexisting-content"
-        canonical = CanonicalDocument.objects.create(sha256=hashlib.sha256(content).hexdigest())
-
-        response = self.client.post(
-            "/upload/",
-            data={"files": [SimpleUploadedFile("existing.pdf", content)]},
-        )
-        canonical.refresh_from_db()
-
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(canonical.index_status, CanonicalDocument.IndexStatus.PUBLISHED)
-
-    @patch("apps.box_upload.views.store_literature")
-    @patch("apps.box_upload.views.fetch_doi_bibtex")
-    @patch("apps.box_upload.views.extract_pdf_evidence", return_value={"doi": "10.1000/same"})
-    def test_same_uploader_and_doi_is_reported_and_skipped(self, extract_evidence, fetch_bibtex, store):
-        canonical = CanonicalDocument.objects.create(doi="10.1000/same", sha256="1" * 64)
-        UploadedDocument.objects.create(
-            canonical_document=canonical,
-            uploader=self.user,
-            original_name="existing.pdf",
-            remote_path="/existing.pdf",
-            sha256="1" * 64,
-            size=1,
-        )
-
-        response = self.client.post(
-            "/upload/",
-            data={"files": [SimpleUploadedFile("duplicate.pdf", b"%PDF-1.7\ndifferent-content")]},
-            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["count"], 0)
-        self.assertEqual(response.json()["skipped"], 1)
-        self.assertIn("已在你的文献中", response.json()["notice"])
-        self.assertEqual(UploadedDocument.objects.count(), 1)
-        store.assert_not_called()
-        fetch_bibtex.assert_not_called()
-
-    @patch("apps.box_upload.views.store_literature")
-    @patch("apps.box_upload.views.fetch_doi_bibtex")
-    @patch("apps.box_upload.views.extract_pdf_evidence", return_value={"doi": "10.1000/shared"})
-    def test_different_uploader_and_same_doi_is_merged_without_pdf(self, extract_evidence, fetch_bibtex, store):
-        other_user = User.objects.create_user(username="other", password="Strong-pass-1234")
-        canonical = CanonicalDocument.objects.create(doi="10.1000/shared", sha256="2" * 64)
-        UploadedDocument.objects.create(
-            canonical_document=canonical,
-            uploader=other_user,
-            original_name="existing.pdf",
-            remote_path="/existing.pdf",
-            sha256="2" * 64,
-            size=1,
-        )
-
-        response = self.client.post(
-            "/upload/",
-            data={"files": [SimpleUploadedFile("shared.pdf", b"%PDF-1.7\ndifferent-content")]},
-            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
-        )
-
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["count"], 0)
-        self.assertEqual(response.json()["merged"], 1)
-        self.assertIn("已关联到我的文献", response.json()["notice"])
-        self.assertEqual(UploadedDocument.objects.count(), 1)
-        self.assertEqual(set(canonical.uploaders.values_list("username", flat=True)), {"member", "other"})
-        store.assert_not_called()
-        fetch_bibtex.assert_not_called()
+        self.assertContains(response, "Duplicate attachment paper")
+        self.assertContains(response, "正文 PDF · 提交者：member", count=1)
 
     def test_doi_is_unique_ignoring_case(self):
         CanonicalDocument.objects.create(doi="10.1000/CASE")
@@ -345,13 +131,11 @@ class UploadPageTests(TestCase):
         with self.assertRaises(IntegrityError), transaction.atomic():
             CanonicalDocument.objects.create(doi="10.1000/case")
 
-    @patch("apps.box_upload.views.enqueue_metadata_proposal_safely")
-    @patch("apps.box_upload.views.resolve_pdf_metadata_safely")
-    @patch("apps.box_upload.views.store_literature", return_value=StoredLiteratureObject(NAS_WEBDAV, "/paper.pdf"))
-    @patch("apps.box_upload.views.fetch_doi_bibtex")
-    @patch("apps.box_upload.views.extract_pdf_evidence")
+    @patch("apps.box_upload.upload_review.store_literature", return_value=StoredLiteratureObject(NAS_WEBDAV, "/paper.pdf"))
+    @patch("apps.box_upload.upload_review.fetch_doi_bibtex")
+    @patch("apps.box_upload.upload_review.extract_pdf_evidence")
     def test_upload_uses_title_matched_doi_before_storage(
-        self, extract_evidence, fetch_bibtex, store, resolve_metadata, enqueue_metadata
+        self, extract_evidence, fetch_bibtex, store
     ):
         extract_evidence.return_value = {
             "doi": "10.5281/zenodo.19590759",
@@ -368,14 +152,15 @@ class UploadPageTests(TestCase):
         }
         fetch_bibtex.side_effect = records.__getitem__
 
+        batch_id = self.client.post("/upload/batches/").json()["batch_id"]
         response = self.client.post(
-            "/upload/",
-            data={"files": [SimpleUploadedFile("paper.pdf", b"%PDF-1.7\nmock")]},
-            HTTP_X_REQUESTED_WITH="XMLHttpRequest",
+            f"/upload/batches/{batch_id}/files/",
+            data={"file": SimpleUploadedFile("paper.pdf", b"%PDF-1.7\nmock")},
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(CanonicalDocument.objects.get().doi, "10.1126/sciadv.aea7345")
+        self.assertEqual(response.json()["item"]["metadata"]["doi"], "10.1126/sciadv.aea7345")
+        self.assertFalse(CanonicalDocument.objects.exists())
         store.assert_called_once()
 
     def test_home_shows_workspace_entries_without_upload_form(self):
@@ -447,14 +232,14 @@ class UploadPageTests(TestCase):
 
         self.assertTemplateUsed(response, "box_upload/library.html")
         self.assertContains(response, "我的文献")
-        self.assertNotContains(response, "mine.pdf · PDF 提交者")
+        self.assertNotContains(response, "mine.pdf · 正文 PDF")
         self.assertNotContains(response, "other.pdf")
         self.assertContains(response, "文献操作")
         self.assertContains(response, "PDF 附件")
         self.assertContains(response, '<div class="file-meta">关联用户：member、other</div>', html=True)
         self.assertContains(response, "关系：你实际上传过 PDF")
-        self.assertContains(response, "PDF 提交者：member")
-        self.assertContains(response, "PDF 提交者：other")
+        self.assertContains(response, "正文 PDF · 提交者：member")
+        self.assertContains(response, "正文 PDF · 提交者：other")
         self.assertContains(response, f'/uploads/{UploadedDocument.objects.get(original_name="mine.pdf").pk}/delete/')
         self.assertNotContains(response, f'/uploads/{UploadedDocument.objects.get(original_name="other.pdf").pk}/delete/')
 
@@ -476,7 +261,7 @@ class UploadPageTests(TestCase):
         self.assertContains(response, "Linked paper")
         self.assertContains(response, "关系：通过 DOI 或 Zotero 关联，未重复保存 PDF")
         self.assertNotContains(response, "owner.pdf")
-        self.assertContains(response, "PDF 提交者：owner")
+        self.assertContains(response, "正文 PDF · 提交者：owner")
         self.assertNotContains(response, f'/uploads/{document.pk}/delete/')
         self.assertNotContains(response, "生成 AI 建议")
 

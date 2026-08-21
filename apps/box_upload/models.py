@@ -138,6 +138,43 @@ class UploadedDocument(models.Model):
         self.canonical_document.uploaders.add(self.uploader_id)
 
 
+class UploadReviewBatch(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending confirmation"
+        COMMITTED = "committed", "Committed"
+
+    uploader = models.ForeignKey(User, on_delete=models.PROTECT, related_name="upload_review_batches")
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+
+
+class UploadReviewItem(models.Model):
+    batch = models.ForeignKey(UploadReviewBatch, on_delete=models.CASCADE, related_name="items")
+    original_name = models.CharField(max_length=500)
+    remote_path = models.CharField(max_length=1000)
+    storage_backend = models.CharField(
+        max_length=32,
+        choices=UploadedDocument.StorageBackend.choices,
+        default=UploadedDocument.StorageBackend.NAS_WEBDAV,
+    )
+    sha256 = models.CharField(max_length=64, db_index=True)
+    size = models.BigIntegerField()
+    content_type = models.CharField(max_length=255, default="application/pdf")
+    metadata = models.JSONField(default=dict)
+    evidence = models.JSONField(default=dict, blank=True)
+    commit_result = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("created_at", "pk")
+
+
 class MetadataProposal(models.Model):
     class Status(models.TextChoices):
         QUEUED = "queued", "Queued"

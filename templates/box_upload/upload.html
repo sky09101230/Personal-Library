@@ -1,113 +1,382 @@
 {% extends "base.html" %}
 {% block title %}上传 PDF | PLAB{% endblock %}
 {% block content %}
-<div class="page-head"><p class="eyebrow">PLAB Literature · NJU Box</p><h1>上传 PDF 文献</h1><p class="subtle">原始文件保留在 NJU Box；系统只把有证据支持的 metadata 标为已验证，低置信结果进入待复核。</p></div>
-{% if messages %}{% for message in messages %}<div class="notice">{{ message }}</div>{% endfor %}{% endif %}
+<style>
+  .upload-channel-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 12px; }
+  .upload-channel { min-width: 0; border: 1px solid var(--line); border-radius: 6px; padding: 7px; background: #fff; }
+  .upload-channel-head { display: flex; justify-content: space-between; gap: 6px; font-size: 11px; font-weight: 700; }
+  .upload-channel-file { display: -webkit-box; min-height: 30px; margin: 5px 0; overflow: hidden; color: var(--muted); font-size: 11px; line-height: 1.35; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+  .upload-channel .progress-track { height: 4px; }
+  .upload-channel-state { min-height: 15px; margin-top: 4px; color: var(--muted); font-size: 10px; }
+  .batch-review { display: none; margin-top: 24px; scroll-margin-top: 20px; }
+  .batch-review.active { display: block; }
+  .batch-review-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; margin-bottom: 8px; }
+  .batch-review-head h2 { margin: 0 0 3px; font-size: 18px; letter-spacing: 0; }
+  .batch-review-head p { margin: 0; }
+  .metadata-table-wrap { overflow-x: auto; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .metadata-table { width: 100%; min-width: 760px; border-collapse: collapse; table-layout: fixed; }
+  .metadata-table th, .metadata-table td { padding: 8px 7px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  .metadata-table td { font-size: 13px; line-height: 1.4; }
+  .metadata-table th { color: var(--muted); font-size: 11px; font-weight: 700; }
+  .metadata-table tr:last-child td { border-bottom: 0; }
+  .metadata-table tr.missing-title, .metadata-table tr.upload-failed { background: #fff0f0; }
+  .metadata-table tr.missing-journal { background: #fff8df; }
+  .metadata-filename { display: -webkit-box; overflow: hidden; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+  .metadata-issue { margin-top: 3px; font-size: 11px; font-weight: 700; }
+  .missing-title .metadata-issue, .upload-failed .metadata-issue { color: var(--danger); }
+  .missing-journal .metadata-issue { color: #8a5b00; }
+  .metadata-editor { display: flex; align-items: stretch; gap: 4px; }
+  .metadata-editor input { flex: 1 1 0; min-width: 0; width: auto; box-sizing: border-box; border: 1px solid #cfd4df; border-radius: 4px; padding: 6px; font: inherit; font-size: 12px; }
+  .metadata-editor button { flex: 0 0 auto; border: 1px solid #c8b8d4; border-radius: 4px; padding: 6px 8px; background: #fff; color: var(--accent); cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; }
+  .metadata-editor button:disabled { opacity: .5; cursor: wait; }
+  .metadata-summary { color: var(--muted); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+  .metadata-row-message { min-height: 15px; margin-top: 3px; color: var(--danger); font-size: 10px; }
+  .batch-review-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 12px; }
+  .batch-review-actions .secondary { border: 1px solid var(--line); border-radius: 4px; padding: 8px 12px; background: #fff; color: var(--ink); cursor: pointer; font: inherit; }
+  .batch-review-actions .primary { padding: 8px 12px; }
+  .batch-status { margin-right: auto; color: var(--muted); font-size: 12px; }
+  @media (max-width: 720px) { .upload-channel-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 520px) { .batch-review-head, .batch-review-actions { align-items: stretch; flex-direction: column; } .batch-status { margin-right: 0; } }
+</style>
+
+<div class="page-head">
+  <p class="eyebrow">PLAB Literature · NAS</p>
+  <h1>上传 PDF 文献</h1>
+  <p class="subtle">PDF 先暂存到 NAS；请在本页核对解析结果，确认后才写入正式文献库。</p>
+</div>
 <div class="panel upload-grid">
   <div>
     <form id="upload-form" method="post" enctype="multipart/form-data">
       {% csrf_token %}{{ form.non_field_errors }}
-      <div class="field">{{ form.files.label_tag }}{{ form.files }}{{ form.files.errors }}<p class="help">可一次选择多个 PDF；上传后会提取前两页与嵌入信息，并在发现 DOI 时查询 Crossref。</p></div>
-      <button id="upload-submit" class="primary" type="submit">Start upload</button>
+      <div class="field">{{ form.files.label_tag }}{{ form.files }}{{ form.files.errors }}<p class="help">可一次选择多个正文 PDF；浏览器最多使用四个并行上传通道。</p></div>
+      <button id="upload-submit" class="primary" type="submit">开始上传并解析</button>
       <div id="progress" class="progress-wrap" aria-live="polite">
         <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
-        <div class="progress-label"><span id="progress-status">Preparing files</span><span id="progress-percent">0%</span></div>
-        <ol id="upload-results" class="upload-results" aria-live="polite"></ol>
+        <div class="progress-label"><span id="progress-status">准备文件</span><span id="progress-percent">0%</span></div>
+        <div id="upload-channels" class="upload-channel-grid"></div>
       </div>
     </form>
   </div>
-  <aside class="side-note"><strong>处理边界</strong><p>相同 DOI 只保留一篇文献和一份 PDF；其他用户会关联到该文献，但不会获得附件审核或删除权限。</p><p>每个文件单独处理；发现 DOI 时会在写入 NAS 前预检 BibTeX，失败文件不会写入。</p></aside>
+  <aside class="side-note"><strong>入库边界</strong><p>上传完成只产生当前用户可见的暂存批次，不会出现在 Library 或 Agent 检索中。</p><p>缺标题必须补全；缺期刊会标黄，由上传者核对后决定是否确认。</p></aside>
 </div>
+
+<section id="batch-review" class="batch-review" aria-live="polite">
+  <div class="batch-review-head">
+    <div><h2>本批 metadata 审核</h2><p id="review-summary" class="subtle"></p></div>
+  </div>
+  <div class="metadata-table-wrap">
+    <table class="metadata-table">
+      <colgroup><col style="width:18%"><col style="width:31%"><col style="width:25%"><col style="width:13%"><col style="width:13%"></colgroup>
+      <thead><tr><th>文件</th><th>标题</th><th>DOI</th><th>期刊</th><th>作者 / 年份</th></tr></thead>
+      <tbody id="review-body"></tbody>
+    </table>
+  </div>
+  <div class="batch-review-actions">
+    <span id="batch-status" class="batch-status"></span>
+    <button id="cancel-batch" class="secondary" type="button">取消本批</button>
+    <button id="confirm-batch" class="primary" type="button" disabled>确认 metadata 并入库</button>
+  </div>
+</section>
+
+<template id="review-row-template">
+  <tr>
+    <td><div class="metadata-filename"></div><div class="metadata-issue"></div></td>
+    <td><div class="metadata-editor"><input class="title-input" maxlength="500"><button class="save-title" type="button">保存</button></div><div class="metadata-row-message"></div></td>
+    <td><div class="metadata-editor"><input class="doi-input" maxlength="255"><button class="reparse-doi" type="button">重新解析</button></div></td>
+    <td class="journal-value"></td>
+    <td class="metadata-summary"></td>
+  </tr>
+</template>
+
 <script>
 (() => {
+  const MAX_CHANNELS = 4;
   const form = document.getElementById('upload-form');
+  const fileInput = form.querySelector('[name="files"]');
+  const csrfToken = form.querySelector('[name="csrfmiddlewaretoken"]').value;
   const submit = document.getElementById('upload-submit');
   const progress = document.getElementById('progress');
-  const bar = document.getElementById('progress-bar');
-  const status = document.getElementById('progress-status');
-  const percent = document.getElementById('progress-percent');
-  const results = document.getElementById('upload-results');
-  const csrfToken = form.querySelector('[name="csrfmiddlewaretoken"]').value;
+  const progressBar = document.getElementById('progress-bar');
+  const progressStatus = document.getElementById('progress-status');
+  const progressPercent = document.getElementById('progress-percent');
+  const channelsRoot = document.getElementById('upload-channels');
+  const review = document.getElementById('batch-review');
+  const reviewBody = document.getElementById('review-body');
+  const reviewSummary = document.getElementById('review-summary');
+  const rowTemplate = document.getElementById('review-row-template');
+  const batchStatus = document.getElementById('batch-status');
+  const confirmButton = document.getElementById('confirm-batch');
+  const cancelButton = document.getElementById('cancel-batch');
+  let currentBatch = null;
+  let batchItems = [];
+  let uploadFailures = [];
+  let fileProgress = [];
 
-  const appendResult = (kind, message) => {
-    const item = document.createElement('li');
-    item.className = `upload-result ${kind}`;
-    item.textContent = message;
-    results.appendChild(item);
+  const post = async (url, body = null) => {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {'X-CSRFToken': csrfToken, 'X-Requested-With': 'XMLHttpRequest'},
+      body,
+    });
+    let payload = {};
+    try { payload = await response.json(); } catch (error) { payload = {}; }
+    if (!response.ok || !payload.ok) throw new Error(payload.message || `服务器返回 HTTP ${response.status}`);
+    return payload;
   };
 
-  const uploadFile = (file, index, total, completed) => new Promise((resolve) => {
+  const makeChannels = () => {
+    channelsRoot.replaceChildren();
+    return Array.from({length: MAX_CHANNELS}, (_, index) => {
+      const channel = document.createElement('div');
+      channel.className = 'upload-channel';
+      const head = document.createElement('div');
+      head.className = 'upload-channel-head';
+      const name = document.createElement('span');
+      name.textContent = `通道 ${index + 1}`;
+      const value = document.createElement('span');
+      value.textContent = '0%';
+      head.append(name, value);
+      const filename = document.createElement('div');
+      filename.className = 'upload-channel-file';
+      filename.textContent = '等待任务';
+      const track = document.createElement('div');
+      track.className = 'progress-track';
+      const bar = document.createElement('div');
+      bar.className = 'progress-bar';
+      track.appendChild(bar);
+      const state = document.createElement('div');
+      state.className = 'upload-channel-state';
+      state.textContent = '空闲';
+      channel.append(head, filename, track, state);
+      channelsRoot.appendChild(channel);
+      return {filename, value, bar, state};
+    });
+  };
+
+  const updateOverallProgress = () => {
+    const value = fileProgress.length ? Math.round(fileProgress.reduce((sum, item) => sum + item, 0) / fileProgress.length) : 0;
+    progressBar.style.width = `${value}%`;
+    progressPercent.textContent = `${value}%`;
+  };
+
+  const stageFile = (batchId, file, fileIndex, channel) => new Promise((resolve) => {
     const request = new XMLHttpRequest();
-    request.open('POST', form.action || window.location.pathname);
+    request.open('POST', `/upload/batches/${batchId}/files/`);
+    request.setRequestHeader('X-CSRFToken', csrfToken);
     request.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
-    request.timeout = 900000;
+    channel.filename.textContent = file.name;
+    channel.filename.title = file.name;
+    channel.state.textContent = '上传 PDF';
+    channel.bar.style.width = '0%';
+    channel.value.textContent = '0%';
     request.upload.onprogress = (event) => {
       if (!event.lengthComputable) return;
       const value = Math.round((event.loaded / event.total) * 100);
-      const overall = Math.round(((completed + value / 100) / total) * 100);
-      bar.style.width = `${overall}%`;
-      percent.textContent = `${overall}%`;
-      status.textContent = `正在处理第 ${index + 1}/${total} 篇：${file.name} · 上传文件`;
-      if (value === 100) {
-        status.textContent = `正在处理第 ${index + 1}/${total} 篇：${file.name} · 服务端解析与存储`;
-        bar.style.width = '';
-        bar.classList.add('indeterminate');
-      }
+      fileProgress[fileIndex] = value;
+      channel.bar.style.width = `${value}%`;
+      channel.value.textContent = `${value}%`;
+      if (value === 100) channel.state.textContent = '服务端解析 metadata 与 NAS 暂存';
+      updateOverallProgress();
     };
     request.onload = () => {
-      let result = {};
-      try { result = JSON.parse(request.responseText); } catch (error) { result = {}; }
-      resolve({
-        ...result,
-        ok: request.status >= 200 && request.status < 300 && result.ok,
-        message: result.message || `服务器返回 HTTP ${request.status}`,
-      });
+      let payload = {};
+      try { payload = JSON.parse(request.responseText); } catch (error) { payload = {}; }
+      fileProgress[fileIndex] = 100;
+      updateOverallProgress();
+      if (request.status >= 200 && request.status < 300 && payload.ok) {
+        channel.state.textContent = '解析完成';
+        resolve({ok: true, index: fileIndex, item: payload.item});
+      } else {
+        channel.state.textContent = '失败';
+        resolve({ok: false, index: fileIndex, filename: file.name, message: payload.message || `服务器返回 HTTP ${request.status}`});
+      }
     };
-    request.onerror = () => resolve({ ok: false, stage: '网络', message: '网络连接失败' });
-    request.ontimeout = () => resolve({ ok: false, stage: '网络', message: '服务器处理超时（15 分钟）' });
+    request.onerror = () => {
+      fileProgress[fileIndex] = 100;
+      channel.state.textContent = '网络失败';
+      updateOverallProgress();
+      resolve({ok: false, index: fileIndex, filename: file.name, message: '网络连接失败'});
+    };
     const data = new FormData();
-    data.append('csrfmiddlewaretoken', csrfToken);
-    data.append('files', file, file.name);
+    data.append('file', file, file.name);
     request.send(data);
   });
 
+  const setRowIssue = (row, issue) => {
+    row.classList.remove('missing-title', 'missing-journal');
+    const label = row.querySelector('.metadata-issue');
+    if (issue === 'missing_title') {
+      row.classList.add('missing-title');
+      label.textContent = '缺少标题';
+    } else if (issue === 'missing_journal') {
+      row.classList.add('missing-journal');
+      label.textContent = '缺少期刊';
+    } else {
+      label.textContent = '可确认';
+    }
+  };
+
+  const updateReviewState = () => {
+    const missingTitles = batchItems.filter((item) => item.issue === 'missing_title').length;
+    const missingJournals = batchItems.filter((item) => item.issue === 'missing_journal').length;
+    const dirtyTitles = batchItems.filter((item) => item.titleDirty).length;
+    const parts = [`已解析 ${batchItems.length} 个文件`];
+    if (missingTitles) parts.push(`${missingTitles} 个缺标题`);
+    if (missingJournals) parts.push(`${missingJournals} 个缺期刊`);
+    if (dirtyTitles) parts.push(`${dirtyTitles} 个标题未保存`);
+    if (uploadFailures.length) parts.push(`${uploadFailures.length} 个上传失败`);
+    reviewSummary.textContent = parts.join(' · ');
+    confirmButton.disabled = !currentBatch || !batchItems.length || missingTitles > 0 || dirtyTitles > 0 || uploadFailures.length > 0;
+  };
+
+  const updateItem = async (item, body, button, messageNode) => {
+    button.disabled = true;
+    messageNode.textContent = '';
+    try {
+      const payload = await post(`/upload/review-items/${item.id}/`, body);
+      batchItems = batchItems.map((current) => current.id === item.id ? payload.item : current);
+      renderReviewRows();
+    } catch (error) {
+      messageNode.textContent = error.message;
+      button.disabled = false;
+    }
+  };
+
+  const renderReviewRows = () => {
+    reviewBody.replaceChildren();
+    batchItems.forEach((item) => {
+      const row = rowTemplate.content.firstElementChild.cloneNode(true);
+      const metadata = item.metadata || {};
+      const filenameNode = row.querySelector('.metadata-filename');
+      filenameNode.textContent = item.filename;
+      filenameNode.title = item.filename;
+      setRowIssue(row, item.issue);
+      const titleInput = row.querySelector('.title-input');
+      const doiInput = row.querySelector('.doi-input');
+      const saveTitle = row.querySelector('.save-title');
+      const reparseDoi = row.querySelector('.reparse-doi');
+      const messageNode = row.querySelector('.metadata-row-message');
+      titleInput.value = item.titleDraft ?? metadata.title ?? '';
+      doiInput.value = metadata.doi || '';
+      row.querySelector('.journal-value').textContent = metadata.journal || '未识别';
+      const authors = (metadata.authors || []).map((author) => author.name || '').filter(Boolean).join('、');
+      row.querySelector('.metadata-summary').textContent = [authors || '作者未识别', metadata.publication_year || '年份未识别'].join(' · ');
+      titleInput.addEventListener('input', () => {
+        item.titleDraft = titleInput.value;
+        item.titleDirty = titleInput.value !== (metadata.title || '');
+        updateReviewState();
+      });
+      saveTitle.addEventListener('click', () => {
+        const data = new URLSearchParams({action: 'save_title', title: titleInput.value});
+        updateItem(item, data, saveTitle, messageNode);
+      });
+      reparseDoi.addEventListener('click', () => {
+        const data = new URLSearchParams({action: 'reparse_doi', doi: doiInput.value});
+        updateItem(item, data, reparseDoi, messageNode);
+      });
+      reviewBody.appendChild(row);
+    });
+    uploadFailures.forEach((failure) => {
+      const row = document.createElement('tr');
+      row.className = 'upload-failed';
+      const cell = document.createElement('td');
+      cell.colSpan = 5;
+      const filename = document.createElement('div');
+      filename.className = 'metadata-filename';
+      filename.textContent = failure.filename;
+      filename.title = failure.filename;
+      const issue = document.createElement('div');
+      issue.className = 'metadata-issue';
+      issue.textContent = failure.message;
+      cell.append(filename, issue);
+      row.appendChild(cell);
+      reviewBody.appendChild(row);
+    });
+    updateReviewState();
+  };
+
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const files = Array.from(form.querySelector('[name="files"]').files || []);
+    const files = Array.from(fileInput.files || []);
     if (!files.length) return;
     submit.disabled = true;
+    fileInput.disabled = true;
     progress.classList.add('active');
-    progress.classList.remove('error');
-    results.replaceChildren();
-    bar.classList.remove('indeterminate');
-    bar.style.width = '0%';
-    percent.textContent = '0%';
-    let uploaded = 0;
-    let merged = 0;
-    let skipped = 0;
-    let failures = 0;
-    for (let index = 0; index < files.length; index += 1) {
-      const file = files[index];
-      status.textContent = `正在处理第 ${index + 1}/${files.length} 篇：${file.name} · 准备上传`;
-      const result = await uploadFile(file, index, files.length, index);
-      bar.classList.remove('indeterminate');
-      if (result.ok) {
-        uploaded += result.count || 0;
-        merged += result.merged || 0;
-        skipped += result.skipped || 0;
-        appendResult('success', result.notice || `${file.name}：处理成功`);
-      } else {
-        failures += 1;
-        appendResult('error', result.message || `${file.name}：处理失败`);
-      }
-      const completed = index + 1;
-      bar.style.width = `${Math.round((completed / files.length) * 100)}%`;
-      percent.textContent = `${Math.round((completed / files.length) * 100)}%`;
+    review.classList.add('active');
+    cancelButton.disabled = false;
+    batchStatus.textContent = '';
+    batchItems = [];
+    uploadFailures = [];
+    fileProgress = files.map(() => 0);
+    const channels = makeChannels();
+    renderReviewRows();
+    progressStatus.textContent = `正在处理 ${files.length} 个文件`;
+    try {
+      const batch = await post('/upload/batches/');
+      currentBatch = batch.batch_id;
+      let nextIndex = 0;
+      const worker = async (channel) => {
+        while (nextIndex < files.length) {
+          const index = nextIndex;
+          nextIndex += 1;
+          const result = await stageFile(currentBatch, files[index], index, channel);
+          if (result.ok) batchItems.push(result.item);
+          else uploadFailures.push(result);
+          renderReviewRows();
+        }
+        channel.filename.textContent = '队列完成';
+        channel.state.textContent = '空闲';
+      };
+      await Promise.all(channels.map(worker));
+      progressStatus.textContent = uploadFailures.length ? '上传完成，请取消本批并重新上传失败文件' : '上传与解析完成，请核对下方 metadata';
+      review.scrollIntoView({behavior: 'smooth', block: 'start'});
+    } catch (error) {
+      batchStatus.textContent = error.message;
+      uploadFailures.push({filename: '批次创建', message: error.message});
+      renderReviewRows();
     }
-    const summary = `批量处理完成：新增 ${uploaded} 篇，关联 ${merged} 篇，跳过 ${skipped} 篇，失败 ${failures} 篇`;
-    status.textContent = summary;
-    if (failures) progress.classList.add('error');
-    submit.disabled = false;
+    if (!currentBatch) {
+      submit.disabled = false;
+      fileInput.disabled = false;
+    }
+  });
+
+  confirmButton.addEventListener('click', async () => {
+    if (!currentBatch) return;
+    confirmButton.disabled = true;
+    cancelButton.disabled = true;
+    batchStatus.textContent = '正在写入正式文献库';
+    try {
+      await post(`/upload/batches/${currentBatch}/confirm/`);
+      window.location.assign("{% url 'library' %}");
+    } catch (error) {
+      batchStatus.textContent = error.message;
+      confirmButton.disabled = false;
+      cancelButton.disabled = false;
+    }
+  });
+
+  cancelButton.addEventListener('click', async () => {
+    if (!currentBatch) return;
+    cancelButton.disabled = true;
+    confirmButton.disabled = true;
+    batchStatus.textContent = '正在清理 NAS 暂存文件';
+    try {
+      const payload = await post(`/upload/batches/${currentBatch}/cancel/`);
+      batchStatus.textContent = payload.message;
+      currentBatch = null;
+      batchItems = [];
+      uploadFailures = [];
+      reviewBody.replaceChildren();
+      review.classList.remove('active');
+      progress.classList.remove('active');
+      submit.disabled = false;
+      fileInput.disabled = false;
+    } catch (error) {
+      batchStatus.textContent = error.message;
+      cancelButton.disabled = false;
+      updateReviewState();
+    }
   });
 })();
 </script>

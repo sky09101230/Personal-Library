@@ -1,11 +1,16 @@
 from django.urls import path
 
-from . import views
+from . import upload_review, views
 
 
 urlpatterns = [
     path("", views.home, name="home"),
-    path("upload/", views.upload, name="box-upload"),
+    path("upload/", upload_review.upload_page, name="box-upload"),
+    path("upload/batches/", upload_review.create_batch, name="upload-review-create"),
+    path("upload/batches/<int:batch_id>/files/", upload_review.stage_file, name="upload-review-stage-file"),
+    path("upload/review-items/<int:item_id>/", upload_review.update_item, name="upload-review-update-item"),
+    path("upload/batches/<int:batch_id>/confirm/", upload_review.confirm_batch, name="upload-review-confirm"),
+    path("upload/batches/<int:batch_id>/cancel/", upload_review.cancel_batch, name="upload-review-cancel"),
     path("uploads/", views.upload_history, name="upload-history"),
     path("uploads/<int:pk>/delete/", views.delete_upload, name="delete-upload"),
     path("zotero/import/", views.zotero_import, name="zotero-import"),

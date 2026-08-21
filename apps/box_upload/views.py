@@ -41,8 +41,6 @@ from .zotero import (
 
 
 _SINGLE_BYTE_RANGE = re.compile(r"^bytes=(?:\d+-\d*|-\d+)$")
-
-
 def _proposal_form_values(proposed):
     proposed = proposed or {}
     return {
@@ -144,7 +142,8 @@ def upload(request):
             remote_paths = []
             merged_count = 0
             skipped_count = 0
-            duplicate_notices = []
+            rejected_count = 0
+            results = []
             current_filename = ""
             current_stage = ""
             try:
@@ -157,74 +156,138 @@ def upload(request):
                     current_stage = "PDF metadata 提取"
                     evidence = extract_pdf_evidence(prepared.uploaded_file)
                     doi = normalize_doi(evidence["doi"])
-                    if len(evidence.get("doi_candidates") or []) > 1:
+                    relationship_evidence = {}
+                    file_role = UploadedDocument.FileRole.PRIMARY
+                    if file_role == UploadedDocument.FileRole.PRIMARY and len(evidence.get("doi_candidates") or []) > 1:
                         current_stage = "DOI 识别"
                         doi, bibtex = select_pdf_doi(evidence, bibtex_fetcher=fetch_doi_bibtex)
                         prefetched_bibtex[doi] = bibtex
                     doi_existing = CanonicalDocument.objects.filter(doi__iexact=doi).first() if doi else None
-                    if doi and doi_existing is None and doi not in prefetched_bibtex:
+                    existing = doi_existing or CanonicalDocument.objects.filter(sha256=prepared.sha256).first()
+                    if (
+                        file_role == UploadedDocument.FileRole.PRIMARY
+                        and doi
+                        and existing is None
+                        and doi not in prefetched_bibtex
+                    ):
                         current_stage = "DOI BibTeX 预检"
                         prefetched_bibtex[doi] = fetch_doi_bibtex(doi)
-                    prepared_files.append((prepared, doi))
+                    prepared_files.append({
+                        "prepared": prepared,
+                        "doi": doi,
+                        "file_role": file_role,
+                        "relationship_evidence": relationship_evidence,
+                        "existing": existing,
+                    })
 
-                for prepared, doi in prepared_files:
+                batch_primaries = {}
+                for item in prepared_files:
+                    if item["file_role"] != UploadedDocument.FileRole.PRIMARY or not item["doi"]:
+                        continue
+                    existing = item["existing"]
+                    if existing is not None and _canonical_has_primary_pdf(existing):
+                        continue
+                    batch_primaries.setdefault(item["doi"], [])
+                    if not any(
+                        candidate["prepared"].sha256 == item["prepared"].sha256
+                        for candidate in batch_primaries[item["doi"]]
+                    ):
+                        batch_primaries[item["doi"]].append(item)
+
+                supplementary_files = []
+                for item in prepared_files:
+                    if item["file_role"] != UploadedDocument.FileRole.SUPPLEMENTARY:
+                        continue
+                    candidates = []
+                    existing_primary = CanonicalDocument.objects.filter(
+                        doi__iexact=item["doi"],
+                        uploads__status=UploadedDocument.Status.UPLOADED,
+                        uploads__file_role=UploadedDocument.FileRole.PRIMARY,
+                    ).first() if item["doi"] else None
+                    if existing_primary is not None:
+                        candidates.append(existing_primary)
+                    else:
+                        candidates.extend(batch_primaries.get(item["doi"], []))
+                    if len(candidates) != 1:
+                        rejected_count += 1
+                        results.append(_batch_result(
+                            item["prepared"].filename,
+                            "rejected",
+                            "未找到对应正文，请先上传正文后再上传补充材料",
+                        ))
+                        continue
+                    item["target"] = candidates[0]
+                    supplementary_files.append(item)
+
+                for item in prepared_files:
+                    if item["file_role"] != UploadedDocument.FileRole.PRIMARY:
+                        continue
+                    prepared = item["prepared"]
+                    doi = item["doi"]
                     current_filename = prepared.filename
                     current_stage = "检查重复"
-                    doi_existing = None
-                    if doi:
-                        doi_existing = CanonicalDocument.objects.filter(doi__iexact=doi).first()
-                    existing = doi_existing or CanonicalDocument.objects.filter(sha256=prepared.sha256).first()
-                    if doi_existing:
-                        association = associate_existing_pdf(doi_existing, request.user)
-                    else:
-                        association = None
-                    if association:
+                    canonical = item["existing"]
+                    if canonical is not None and _canonical_has_primary_pdf(canonical):
+                        association = associate_existing_pdf(canonical, request.user)
+                        item["canonical"] = canonical
+                        item["saved"] = association is not None
                         if association == "skipped":
                             skipped_count += 1
-                            duplicate_notices.append(f"{prepared.filename}：已在你的文献中，已跳过")
+                            results.append(_batch_result(prepared.filename, "skipped", "已在你的文献中，已跳过"))
                         else:
                             merged_count += 1
-                            duplicate_notices.append(
-                                f"{prepared.filename}：文献已存在，已关联到我的文献，未重复保存 PDF"
-                            )
+                            results.append(_batch_result(
+                                prepared.filename,
+                                "merged",
+                                "文献已存在，已关联到我的文献，未重复保存 PDF",
+                            ))
                         continue
 
-                    if existing is not None:
-                        canonical, created = existing, False
-                    elif doi:
-                        canonical, created = CanonicalDocument.objects.get_or_create(
-                            doi=doi,
-                            defaults={"sha256": prepared.sha256},
-                        )
+                    if canonical is None:
+                        if doi:
+                            canonical, created = CanonicalDocument.objects.get_or_create(
+                                doi=doi,
+                                defaults={"sha256": prepared.sha256},
+                            )
+                        else:
+                            canonical, created = CanonicalDocument.objects.get_or_create(sha256=prepared.sha256)
                     else:
-                        canonical, created = CanonicalDocument.objects.get_or_create(sha256=prepared.sha256)
-                    if doi and not created and canonical.doi.casefold() == doi.casefold():
+                        created = False
+                    if not created and _canonical_has_primary_pdf(canonical):
                         association = associate_existing_pdf(canonical, request.user)
-                        if association:
-                            if association == "skipped":
-                                skipped_count += 1
-                                duplicate_notices.append(f"{prepared.filename}：已在你的文献中，已跳过")
-                            else:
-                                merged_count += 1
-                                duplicate_notices.append(
-                                    f"{prepared.filename}：文献已存在，已关联到我的文献，未重复保存 PDF"
-                                )
-                            continue
+                        item["canonical"] = canonical
+                        item["saved"] = association is not None
+                        skipped_count += association == "skipped"
+                        merged_count += association == "reused"
+                        results.append(_batch_result(
+                            prepared.filename,
+                            "skipped" if association == "skipped" else "merged",
+                            "已在你的文献中，已跳过" if association == "skipped" else "文献已存在，已关联到我的文献，未重复保存 PDF",
+                        ))
+                        continue
                     current_stage = "NAS 存储"
-                    upload_record = save_pdf_upload(
-                        canonical,
-                        request.user,
-                        prepared,
-                        store_file=store_literature,
-                        reuse_existing_pdf=bool(doi),
-                    )
+                    try:
+                        upload_record = save_pdf_upload(
+                            canonical,
+                            request.user,
+                            prepared,
+                            store_file=store_literature,
+                            reuse_existing_pdf=bool(doi),
+                        )
+                    except LiteratureStorageError as exc:
+                        item["saved"] = False
+                        if created and not canonical.uploads.exists() and not canonical.external_references.exists():
+                            canonical.delete()
+                        results.append(_batch_result(prepared.filename, "failed", f"NAS 存储失败：{exc}"))
+                        continue
+                    item["canonical"] = canonical
+                    item["saved"] = True
                     if upload_record is None:
                         skipped_count += 1
-                        duplicate_notices.append(
-                            f"{prepared.filename}：文献已由另一请求保存，未重复保存 PDF"
-                        )
+                        results.append(_batch_result(prepared.filename, "skipped", "文献已由另一请求保存，未重复保存 PDF"))
                         continue
                     remote_paths.append(upload_record.remote_path)
+                    results.append(_batch_result(prepared.filename, "uploaded", "正文已上传"))
                     if created:
                         bibtex = prefetched_bibtex.get(doi)
                         resolve_pdf_metadata_safely(
@@ -238,6 +301,35 @@ def upload(request):
                         source_upload=upload_record,
                         uploaded_file=prepared.uploaded_file,
                     )
+
+                for item in supplementary_files:
+                    prepared = item["prepared"]
+                    target = item["target"]
+                    canonical = target if isinstance(target, CanonicalDocument) else target.get("canonical")
+                    if canonical is None or target is not canonical and not target.get("saved"):
+                        rejected_count += 1
+                        results.append(_batch_result(prepared.filename, "rejected", "对应正文上传失败，补充材料未上传"))
+                        continue
+                    current_filename = prepared.filename
+                    current_stage = "NAS 存储"
+                    try:
+                        upload_record = save_pdf_upload(
+                            canonical,
+                            request.user,
+                            prepared,
+                            store_file=store_literature,
+                            file_role=UploadedDocument.FileRole.SUPPLEMENTARY,
+                            relationship_evidence=item["relationship_evidence"],
+                        )
+                    except LiteratureStorageError as exc:
+                        results.append(_batch_result(prepared.filename, "failed", f"NAS 存储失败：{exc}"))
+                        continue
+                    if upload_record is None:
+                        skipped_count += 1
+                        results.append(_batch_result(prepared.filename, "skipped", "补充材料已存在，未重复保存 PDF"))
+                        continue
+                    remote_paths.append(upload_record.remote_path)
+                    results.append(_batch_result(prepared.filename, "uploaded", "补充材料已附属到对应正文"))
             except (LiteratureStorageError, MetadataResolutionError, PdfValidationError) as exc:
                 preflight_failed = isinstance(exc, MetadataResolutionError)
                 invalid_pdf = isinstance(exc, PdfValidationError)
@@ -258,7 +350,7 @@ def upload(request):
                     }, status=400)
                 form.add_error(None, message)
             else:
-                notice = "；".join(duplicate_notices)
+                notice = "；".join(result["notice"] for result in results)
                 if is_ajax:
                     return JsonResponse({
                         "ok": True,
@@ -266,8 +358,10 @@ def upload(request):
                         "count": len(remote_paths),
                         "merged": merged_count,
                         "skipped": skipped_count,
+                        "rejected": rejected_count,
                         "notice": notice,
                         "paths": remote_paths,
+                        "results": results,
                     })
                 messages.success(
                     request,

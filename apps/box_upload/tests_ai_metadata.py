@@ -17,7 +17,7 @@ from .metadata_jobs import (
     process_next_metadata_proposal,
     queue_existing_metadata_proposals,
 )
-from .models import CanonicalDocument, MetadataProposal, UploadedDocument
+from .models import CanonicalDocument, MetadataProposal, UploadedDocument, UploadReviewBatch, UploadReviewItem
 from .storage import NAS_WEBDAV, StoredLiteratureObject
 
 
@@ -464,25 +464,22 @@ class MetadataUploadIntegrationTests(TestCase):
         self.user = User.objects.create_user(username="member", password="Strong-pass-1234")
         self.client.force_login(self.user)
 
-    @patch(
-        "apps.box_upload.views.store_literature",
-        return_value=StoredLiteratureObject(
-            NAS_WEBDAV,
-            "/public/PLAB_KnowledgeBase/Literature/ai-review.pdf",
-        ),
-    )
-    @patch.dict("os.environ", {
-        "NJU_BOX_API_TOKEN": "env-token",
-        "NJU_BOX_LIBRARY_PASSWORD": "env-password",
-    }, clear=True)
-    def test_upload_succeeds_and_records_disabled_ai_state(self, store_file):
-        response = self.client.post("/upload/", data={
-            "files": [SimpleUploadedFile("ai-review.pdf", b"%PDF-1.7\nno doi", content_type="application/pdf")],
-        })
+    @patch.dict("os.environ", {}, clear=True)
+    def test_uploader_confirmed_upload_does_not_create_admin_ai_review(self):
+        batch = UploadReviewBatch.objects.create(uploader=self.user)
+        UploadReviewItem.objects.create(
+            batch=batch,
+            original_name="ai-review.pdf",
+            remote_path="/public/PLAB_KnowledgeBase/Literature/ai-review.pdf",
+            storage_backend=NAS_WEBDAV,
+            sha256="f" * 64,
+            size=100,
+            metadata={"title": "Uploader confirmed", "journal": "Journal"},
+        )
 
-        self.assertEqual(response.status_code, 302)
+        response = self.client.post(f"/upload/batches/{batch.pk}/confirm/")
+
+        self.assertEqual(response.status_code, 200)
         upload = UploadedDocument.objects.get(original_name="ai-review.pdf")
         self.assertEqual(upload.storage_backend, NAS_WEBDAV)
-        proposal = MetadataProposal.objects.get()
-        self.assertEqual(proposal.status, MetadataProposal.Status.FAILED)
-        self.assertEqual(proposal.error_code, "disabled")
+        self.assertFalse(MetadataProposal.objects.exists())
