@@ -75,9 +75,41 @@ def _proposal_is_bulk_safe(proposal):
 
 def _preview_document_for_proposal(proposal):
     source_upload = proposal.source_upload
-    if source_upload is not None and source_upload.status == UploadedDocument.Status.UPLOADED:
+    if (
+        source_upload is not None
+        and source_upload.status == UploadedDocument.Status.UPLOADED
+        and source_upload.file_role == UploadedDocument.FileRole.PRIMARY
+    ):
         return source_upload
-    return proposal.canonical_document.uploads.filter(status=UploadedDocument.Status.UPLOADED).first()
+    return proposal.canonical_document.uploads.filter(
+        status=UploadedDocument.Status.UPLOADED,
+        file_role=UploadedDocument.FileRole.PRIMARY,
+    ).first()
+
+
+def _set_visible_uploads(literature):
+    seen_hashes = set()
+    literature.visible_uploads = []
+    for upload in sorted(
+        literature.uploads.all(),
+        key=lambda upload: upload.file_role != UploadedDocument.FileRole.PRIMARY,
+    ):
+        key = (upload.sha256, upload.uploader_id, upload.file_role) if upload.sha256 else f"upload:{upload.pk}"
+        if key in seen_hashes:
+            continue
+        seen_hashes.add(key)
+        literature.visible_uploads.append(upload)
+
+
+def _canonical_has_primary_pdf(canonical):
+    return canonical.uploads.filter(
+        status=UploadedDocument.Status.UPLOADED,
+        file_role=UploadedDocument.FileRole.PRIMARY,
+    ).exists()
+
+
+def _batch_result(filename, state, notice):
+    return {"filename": filename, "state": state, "notice": notice}
 
 
 @login_required
@@ -92,6 +124,7 @@ def home(request):
         "uploaders",
     ).order_by("-created_at")[:5]
     for literature in recent_literature:
+        _set_visible_uploads(literature)
         literature.latest_metadata_proposal = next(iter(literature.metadata_proposals.all()), None)
         literature.can_review_ai_metadata = can_review_document(request.user, literature)
     return render(request, "box_upload/home.html", {
@@ -312,6 +345,7 @@ def library(request, uploader=None):
         ).distinct()
     page = Paginator(records, 20).get_page(request.GET.get("page"))
     for literature in page.object_list:
+        _set_visible_uploads(literature)
         literature.latest_metadata_proposal = next(iter(literature.metadata_proposals.all()), None)
         literature.can_review_ai_metadata = can_review_document(request.user, literature)
         literature.has_own_upload = bool(

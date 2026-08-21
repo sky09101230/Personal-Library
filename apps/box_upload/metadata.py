@@ -26,6 +26,14 @@ BIBTEX_RESPONSE_LIMIT = 100_000
 BIBTEX_EVIDENCE_LIMIT = 50_000
 DOI_CANDIDATE_LIMIT = 20
 DOI_TITLE_MATCH_THRESHOLD = 0.70
+GENERATED_PDF_TITLE_PATTERN = re.compile(
+    r"^(?:untitled|[A-Z][A-Z0-9-]*\s+\d+\.\.\d+)$",
+    re.IGNORECASE,
+)
+NUMBERED_AUTHOR_PATTERN = re.compile(
+    r"\b([A-Z][A-Za-z.\-']+(?:\s+[A-Z][A-Za-z.\-']+){1,3})"
+    r"(?=\d+\s*[*\u2020\u2217,]?(?:\s|$))"
+)
 
 
 class MetadataResolutionError(Exception):
@@ -60,7 +68,8 @@ def extract_pdf_evidence(uploaded_file):
         try:
             reader = PdfReader(uploaded_file, strict=False)
             metadata = reader.metadata or {}
-            evidence["title"] = _clean_text(getattr(metadata, "title", None) or metadata.get("/Title"))
+            embedded_title = _clean_text(getattr(metadata, "title", None) or metadata.get("/Title"))
+            evidence["title"] = None if _is_generated_pdf_title(embedded_title) else embedded_title
             author = _clean_text(getattr(metadata, "author", None) or metadata.get("/Author"))
             if author:
                 evidence["authors"] = [author]
@@ -72,6 +81,12 @@ def extract_pdf_evidence(uploaded_file):
             for page_index in page_indexes:
                 page = reader.pages[page_index]
                 text = page.extract_text() or ""
+                if page_index == 0 and not evidence["title"]:
+                    page_title = _extract_first_page_title(text)
+                    if page_title:
+                        evidence["title"] = page_title
+                if page_index == 0 and not evidence["authors"]:
+                    evidence["authors"] = _extract_first_page_authors(text)
                 page_dois = _extract_dois(text)
                 evidence["page_numbers_scanned"].append(page_index + 1)
                 evidence["pages"].append({
@@ -179,6 +194,7 @@ def select_pdf_doi(evidence, bibtex_fetcher=None):
             "raw_bibtex": raw_bibtex,
             "title": metadata["title"],
             "title_similarity": _title_similarity(evidence["title"], metadata["title"]),
+            "has_publication_container": bool(metadata["journal"]),
             "source": candidate.get("source"),
             "page": candidate.get("page"),
         }
@@ -188,14 +204,21 @@ def select_pdf_doi(evidence, bibtex_fetcher=None):
 
     if not matches:
         raise MetadataResolutionError("No PDF DOI candidate returned matching BibTeX metadata.")
-    selected = max(matches, key=lambda candidate: candidate["title_similarity"])
+    selected = max(
+        matches,
+        key=lambda candidate: (
+            candidate["title_similarity"],
+            candidate["has_publication_container"],
+        ),
+    )
     evidence["doi_selection"] = {
-        "method": "bibtex_title_similarity",
+        "method": "bibtex_title_similarity_then_publication_container",
         "threshold": DOI_TITLE_MATCH_THRESHOLD,
         "candidates": [{
             "doi": candidate["doi"],
             "title": candidate["title"],
             "title_similarity": round(candidate["title_similarity"], 6),
+            "has_publication_container": candidate["has_publication_container"],
         } for candidate in matches],
     }
     if selected["title_similarity"] < DOI_TITLE_MATCH_THRESHOLD:
@@ -567,6 +590,56 @@ def _append_doi_candidate(candidates, candidate):
 def _title_similarity(left, right):
     normalize = lambda value: " ".join(re.findall(r"\w+", value.lower()))
     return SequenceMatcher(None, normalize(left), normalize(right)).ratio()
+
+
+def _is_generated_pdf_title(value):
+    return bool(value and GENERATED_PDF_TITLE_PATTERN.fullmatch(_clean_text(value)))
+
+
+def _extract_first_page_title(text):
+    lines = [_clean_text(line) for line in str(text or "").splitlines()]
+    lines = [line for line in lines if line]
+    title_lines = []
+    for line in lines[:20]:
+        if re.match(r"^(?:abstract|\u6458\u8981)\b", line, re.IGNORECASE):
+            break
+        if title_lines and (_looks_like_pdf_author_line(line) or _looks_like_numbered_author_line(line)):
+            break
+        title_lines.append(line)
+    return _clean_text(" ".join(title_lines))
+
+
+def _looks_like_pdf_author_line(line):
+    return bool(
+        re.search(r",\s*[a-z](?:\s*,\s*[a-z])*(?:\s*[,*\u2020])", line, re.IGNORECASE)
+        or re.search(r"\s+(?:and|\u7b49)\s*$", line, re.IGNORECASE)
+    )
+
+
+def _looks_like_numbered_author_line(line):
+    return bool(NUMBERED_AUTHOR_PATTERN.search(line))
+
+
+def _extract_first_page_authors(text):
+    lines = [_clean_text(line) for line in str(text or "").splitlines()]
+    lines = [line for line in lines if line]
+    started = False
+    authors = []
+    for line in lines[:20]:
+        if re.match(r"^(?:abstract|\u6458\u8981)\b", line, re.IGNORECASE):
+            break
+        numbered = _looks_like_numbered_author_line(line)
+        if not started:
+            if not (numbered or _looks_like_pdf_author_line(line)):
+                continue
+            started = True
+        if numbered:
+            authors.extend(_clean_text(value) for value in NUMBERED_AUTHOR_PATTERN.findall(line))
+        elif not authors and _looks_like_pdf_author_line(line):
+            authors.append(line)
+        else:
+            break
+    return list(dict.fromkeys(author for author in authors if author))
 
 
 def _first(value):

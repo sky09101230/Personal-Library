@@ -52,7 +52,10 @@ def prepare_pdf(uploaded_file):
 def associate_existing_pdf(canonical, uploader):
     with transaction.atomic():
         canonical = CanonicalDocument.objects.select_for_update().get(pk=canonical.pk)
-        if not canonical.uploads.filter(status=UploadedDocument.Status.UPLOADED).exists():
+        if not canonical.uploads.filter(
+            status=UploadedDocument.Status.UPLOADED,
+            file_role=UploadedDocument.FileRole.PRIMARY,
+        ).exists():
             return None
         already_associated = canonical.uploaders.filter(pk=uploader.pk).exists()
         canonical.uploaders.add(uploader)
@@ -62,7 +65,15 @@ def associate_existing_pdf(canonical, uploader):
     return "skipped" if already_associated else "reused"
 
 
-def save_pdf_upload(canonical, uploader, prepared, store_file=None, reuse_existing_pdf=False):
+def save_pdf_upload(
+    canonical,
+    uploader,
+    prepared,
+    store_file=None,
+    reuse_existing_pdf=False,
+    file_role=UploadedDocument.FileRole.PRIMARY,
+    relationship_evidence=None,
+):
     caller_canonical = canonical
     store_file = store_file or store_literature
     stored = store_file(prepared.uploaded_file)
@@ -70,11 +81,16 @@ def save_pdf_upload(canonical, uploader, prepared, store_file=None, reuse_existi
     try:
         with transaction.atomic():
             canonical = CanonicalDocument.objects.select_for_update().get(pk=canonical.pk)
-            existing_upload = (
-                canonical.uploads.filter(status=UploadedDocument.Status.UPLOADED).first()
-                if reuse_existing_pdf
-                else None
-            )
+            existing_upload = canonical.uploads.filter(
+                status=UploadedDocument.Status.UPLOADED,
+                sha256=prepared.sha256,
+                file_role=file_role,
+            ).first()
+            if existing_upload is None and reuse_existing_pdf and file_role == UploadedDocument.FileRole.PRIMARY:
+                existing_upload = canonical.uploads.filter(
+                    status=UploadedDocument.Status.UPLOADED,
+                    file_role=UploadedDocument.FileRole.PRIMARY,
+                ).first()
             duplicate_type = (
                 UploadedDocument.DuplicateType.EXACT
                 if UploadedDocument.objects.filter(sha256=prepared.sha256).exists()
@@ -89,6 +105,8 @@ def save_pdf_upload(canonical, uploader, prepared, store_file=None, reuse_existi
                     sha256=prepared.sha256,
                     size=prepared.size,
                     content_type="application/pdf",
+                    file_role=file_role,
+                    relationship_evidence=relationship_evidence or {},
                     duplicate_type=duplicate_type,
                 )
             if existing_upload:
@@ -96,12 +114,17 @@ def save_pdf_upload(canonical, uploader, prepared, store_file=None, reuse_existi
 
             update_fields = []
             if (
+                file_role == UploadedDocument.FileRole.PRIMARY
+                and
                 not canonical.sha256
                 and not CanonicalDocument.objects.exclude(pk=canonical.pk).filter(sha256=prepared.sha256).exists()
             ):
                 canonical.sha256 = prepared.sha256
                 update_fields.append("sha256")
-            if canonical.index_status != CanonicalDocument.IndexStatus.PUBLISHED:
+            if (
+                file_role == UploadedDocument.FileRole.PRIMARY
+                and canonical.index_status != CanonicalDocument.IndexStatus.PUBLISHED
+            ):
                 canonical.index_status = CanonicalDocument.IndexStatus.PUBLISHED
                 update_fields.append("index_status")
             if update_fields:
@@ -114,6 +137,7 @@ def save_pdf_upload(canonical, uploader, prepared, store_file=None, reuse_existi
         raise
     if document is None:
         get_literature_storage(stored.backend).delete(stored.remote_path)
-    caller_canonical.sha256 = canonical.sha256
-    caller_canonical.index_status = canonical.index_status
+    if file_role == UploadedDocument.FileRole.PRIMARY:
+        caller_canonical.sha256 = canonical.sha256
+        caller_canonical.index_status = canonical.index_status
     return document

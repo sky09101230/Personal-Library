@@ -1290,6 +1290,33 @@ class MetadataResolutionTests(TestCase):
                 self.assertEqual(doi, expected_doi)
                 self.assertEqual(evidence["doi"], expected_doi)
 
+    def test_multiple_matching_dois_prefer_published_article_over_dataset(self):
+        title = "Quantum-enhanced time-domain spectroscopy"
+        dataset_doi = "10.5525/gla.researchdata.1848"
+        article_doi = "10.1126/sciadv.adt2187"
+        evidence = {
+            "doi": dataset_doi,
+            "title": title,
+            "doi_candidates": [
+                {"doi": dataset_doi, "source": "pdf_page", "page": 7},
+                {"doi": article_doi, "source": "pdf_page", "page": 7},
+            ],
+        }
+        bibtex = {
+            dataset_doi: (
+                f"@misc{{data, title={{{title}}}, author={{Adamou, Dionysis}}, "
+                f"year={{2024}}, doi={{{dataset_doi}}}}}"
+            ),
+            article_doi: (
+                f"@article{{paper, title={{{title}}}, author={{Adamou, Dionysis}}, "
+                f"journal={{Science Advances}}, year={{2025}}, doi={{{article_doi}}}}}"
+            ),
+        }
+
+        doi, _ = select_pdf_doi(evidence, bibtex_fetcher=bibtex.__getitem__)
+
+        self.assertEqual(doi, article_doi)
+
     @patch("apps.box_upload.metadata.PdfReader")
     def test_doi_scan_reads_first_two_and_last_two_pages(self, pdf_reader):
         class Page:
@@ -1345,6 +1372,138 @@ class MetadataResolutionTests(TestCase):
         self.assertEqual(
             [candidate["doi"] for candidate in evidence["doi_candidates"]],
             ["10.1000/title.1", "10.1000/reference.2", "10.1000/raw.3"],
+        )
+
+    @patch("apps.box_upload.metadata.PdfReader")
+    def test_generated_pdf_title_uses_first_page_title_for_doi_matching(self, pdf_reader):
+        class Page:
+            def __init__(self, text):
+                self.text = text
+
+            def extract_text(self):
+                return self.text
+
+        article_doi = "10.1117/1.AP.6.5.056004"
+        pages = [
+            Page(
+                "Superresolution imaging using superoscillatory\n"
+                "diffractive neural networks\n"
+                "Hang Chen ,a,\u2020 Sheng Gao ,a,\u2020\n"
+                f"[DOI: {article_doi}]\n"
+                "Abstract. Optical superoscillation enables far-field superresolution imaging."
+            ),
+            Page("second"),
+            Page("Reference DOI 10.1000/REFERENCE.2"),
+        ]
+        pdf_reader.return_value = type(
+            "Reader",
+            (),
+            {"metadata": {"/Title": "AP-24-110703 1..11"}, "pages": pages},
+        )()
+        uploaded = SimpleUploadedFile("paper.pdf", b"%PDF-1.7\n")
+
+        evidence = extract_pdf_evidence(uploaded)
+
+        self.assertEqual(
+            evidence["title"],
+            "Superresolution imaging using superoscillatory diffractive neural networks",
+        )
+        bibtex = {
+            article_doi.lower(): (
+                "@article{article, title={Superresolution imaging using superoscillatory "
+                "diffractive neural networks}, author={Doe, Jane}, year={2024}, "
+                f"doi={{{article_doi}}}}}"
+            ),
+            "10.1000/reference.2": (
+                "@article{reference, title={An unrelated reference work}, author={Doe, Jane}, "
+                "year={2024}, doi={10.1000/reference.2}}"
+            ),
+        }
+
+        doi, _ = select_pdf_doi(evidence, bibtex_fetcher=bibtex.__getitem__)
+
+        self.assertEqual(doi, article_doi.lower())
+
+    @patch("apps.box_upload.metadata.PdfReader")
+    def test_untitled_pdf_metadata_uses_first_page_title(self, pdf_reader):
+        class Page:
+            def extract_text(self):
+                return (
+                    "Spatial Terahertz Modulator\n"
+                    "Zhenwei Xie1,2* Xinke Wang1* Jiasheng Ye1\n"
+                    "Abstract\nTerahertz technology is developing rapidly."
+                )
+
+        pdf_reader.return_value = type(
+            "Reader",
+            (),
+            {"metadata": {"/Title": "untitled"}, "pages": [Page()]},
+        )()
+
+        evidence = extract_pdf_evidence(SimpleUploadedFile("paper.pdf", b"%PDF-1.7\n"))
+
+        self.assertEqual(evidence["title"], "Spatial Terahertz Modulator")
+
+    @patch("apps.box_upload.metadata.PdfReader")
+    def test_untitled_pdf_metadata_stays_empty_when_first_page_title_is_unavailable(self, pdf_reader):
+        class Page:
+            def extract_text(self):
+                return ""
+
+        pdf_reader.return_value = type(
+            "Reader",
+            (),
+            {"metadata": {"/Title": "untitled"}, "pages": [Page()]},
+        )()
+
+        evidence = extract_pdf_evidence(SimpleUploadedFile("paper.pdf", b"%PDF-1.7\n"))
+
+        self.assertIsNone(evidence["title"])
+
+    @patch("apps.box_upload.metadata.PdfReader")
+    def test_empty_pdf_metadata_uses_first_page_title_and_numbered_authors(self, pdf_reader):
+        class Page:
+            def __init__(self, text):
+                self.text = text
+
+            def extract_text(self):
+                return self.text
+
+        pdf_reader.return_value = type(
+            "Reader",
+            (),
+            {
+                "metadata": {},
+                "pages": [
+                    Page(
+                        "Optical Diffusion Models for Image Generation\n"
+                        "Ilker Oguz1 Niyazi Ulas Dinc1 Mustafa Yildirim1 Junjie Ke2 Innfarn Yoo2\n"
+                        "Qifei Wang3 Feng Yang2\u2217 Christophe Moser1\u2217 Demetri Psaltis1\u2217\n"
+                        "1 Ecole Polytechnique Federale de Lausanne 2 Google Research 3 Google\n"
+                        "Abstract\n"
+                        "Diffusion models generate new samples."
+                    )
+                ],
+            },
+        )()
+        uploaded = SimpleUploadedFile("paper.pdf", b"%PDF-1.7\n")
+
+        evidence = extract_pdf_evidence(uploaded)
+
+        self.assertEqual(evidence["title"], "Optical Diffusion Models for Image Generation")
+        self.assertEqual(
+            evidence["authors"],
+            [
+                "Ilker Oguz",
+                "Niyazi Ulas Dinc",
+                "Mustafa Yildirim",
+                "Junjie Ke",
+                "Innfarn Yoo",
+                "Qifei Wang",
+                "Feng Yang",
+                "Christophe Moser",
+                "Demetri Psaltis",
+            ],
         )
 
     def test_bibtex_is_primary_and_crossref_fills_missing_abstract(self):

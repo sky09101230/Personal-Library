@@ -158,6 +158,30 @@ class McpHttpTests(TransactionTestCase):
         self.assertIn("https://plab.example.test/library/download/signed/token/", self._tool_text(response))
         self.assertEqual(build_download_url.call_args.args[0].pk, self.document.pk)
 
+    @patch("apps.mcp_gateway.server.build_literature_download_url", return_value="https://plab.example.test/library/download/signed/token/")
+    def test_mcp_download_prefers_primary_pdf_over_supplementary_material(self, build_download_url):
+        supplementary = UploadedDocument.objects.create(
+            canonical_document=self.canonical,
+            uploader=self.user,
+            original_name="mcp-paper-supplement.pdf",
+            remote_path="/mcp-paper-supplement.pdf",
+            sha256="b" * 64,
+            size=4,
+            content_type="application/pdf",
+            file_role=UploadedDocument.FileRole.SUPPLEMENTARY,
+        )
+        self.assertEqual(self._initialize(self.mcp_client).status_code, 200)
+
+        response = self._call(
+            self.mcp_client,
+            "get_literature_download_link",
+            {"document_id": self.canonical.id},
+        )
+
+        self.assertIn("https://plab.example.test/library/download/signed/token/", self._tool_text(response))
+        self.assertEqual(build_download_url.call_args.args[0].pk, self.document.pk)
+        self.assertNotEqual(build_download_url.call_args.args[0].pk, supplementary.pk)
+
     @patch(
         "apps.mcp_gateway.server.store_literature",
         return_value=StoredLiteratureObject(NAS_WEBDAV, "/public/PLAB_KnowledgeBase/Literature/uploaded.pdf"),

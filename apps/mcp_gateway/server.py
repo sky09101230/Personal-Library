@@ -144,6 +144,7 @@ def _get_download_document(document_id):
         canonical_document_id=document_id,
         canonical_document__index_status=CanonicalDocument.IndexStatus.PUBLISHED,
         status=UploadedDocument.Status.UPLOADED,
+        file_role=UploadedDocument.FileRole.PRIMARY,
     ).first()
 
 

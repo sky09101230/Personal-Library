@@ -94,6 +94,10 @@ class ZoteroConnection(models.Model):
 
 
 class UploadedDocument(models.Model):
+    class FileRole(models.TextChoices):
+        PRIMARY = "primary", "Primary PDF"
+        SUPPLEMENTARY = "supplementary", "Supplementary material"
+
     class StorageBackend(models.TextChoices):
         NAS_WEBDAV = "nas_webdav", "NAS WebDAV"
 
@@ -119,6 +123,8 @@ class UploadedDocument(models.Model):
     sha256 = models.CharField(max_length=64, db_index=True)
     size = models.BigIntegerField()
     content_type = models.CharField(max_length=255, blank=True)
+    file_role = models.CharField(max_length=16, choices=FileRole.choices, default=FileRole.PRIMARY, db_index=True)
+    relationship_evidence = models.JSONField(default=dict, blank=True)
     duplicate_type = models.CharField(max_length=16, choices=DuplicateType.choices, default=DuplicateType.NEW)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.UPLOADED)
     error_message = models.TextField(blank=True)

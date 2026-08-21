@@ -55,9 +55,9 @@
           {% if is_my_uploads %}<div class="file-meta">{% if literature.has_own_upload %}关系：你实际上传过 PDF{% else %}关系：通过 DOI 或 Zotero 关联，未重复保存 PDF{% endif %}</div>{% endif %}
         </td>
         <td class="attachment-actions-column">
-          {% for upload in literature.uploads.all %}
+          {% for upload in literature.visible_uploads %}
           <div class="attachment-item">
-            <div class="file-meta">PDF 提交者：{{ upload.uploader.username }}</div>
+            <div class="file-meta">{% if upload.file_role == 'supplementary' %}补充材料{% else %}正文 PDF{% endif %} · 提交者：{{ upload.uploader.username }}</div>
             <div class="row-actions">
               <a class="row-action primary-action" href="{% url 'view-document' upload.pk %}" target="_blank" rel="noopener">在线打开</a>
               <a class="row-action" href="{% url 'download-document' upload.pk %}">下载</a>
