@@ -135,7 +135,7 @@ def _ensure_page_evidence(proposal):
 
 
 def _download_source_pdf(upload):
-    limit = int(os.environ.get("MCP_MAX_UPLOAD_BYTES", getattr(settings, "MCP_MAX_UPLOAD_BYTES", 20971520)))
+    limit = int(os.environ.get("MCP_MAX_UPLOAD_BYTES", getattr(settings, "MCP_MAX_UPLOAD_BYTES", 100 * 1024 * 1024)))
     stream = open_literature_stream(upload)
     content = bytearray()
     try:

@@ -12,7 +12,7 @@
 
 ```dotenv
 MCP_PUBLIC_BASE_URL=https://library.example.edu
-MCP_MAX_UPLOAD_BYTES=20971520
+MCP_MAX_UPLOAD_BYTES=104857600
 ```
 
 管理员在 Django 后台创建访问令牌并仅通过安全渠道发送给使用者。用户在自己的 Codex MCP 配置中使用 `Authorization: Bearer <token>` 请求头连接 `${MCP_PUBLIC_BASE_URL}/mcp`。
