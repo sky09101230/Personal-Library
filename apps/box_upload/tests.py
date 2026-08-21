@@ -1,5 +1,6 @@
 from io import BytesIO
 from threading import Barrier
+from unittest import skip
 from unittest.mock import MagicMock, patch
 import hashlib
 import json
@@ -14,10 +15,7 @@ from django.test import TestCase, override_settings
 from .services import (
     LiteratureStorageError,
     NjuBoxUploadError,
-    delete_from_nju_box,
-    ensure_nju_box_directory,
     stream_from_nju_box,
-    upload_to_nju_box,
 )
 from .storage import NAS_WEBDAV, StoredLiteratureObject
 from .metadata import (
@@ -999,31 +997,9 @@ class UploadPageTests(TestCase):
             self.assertContains(response, f'/library/view/{document.pk}/')
             self.assertContains(response, "在线打开")
 
-    @patch("apps.box_upload.services.get_download_link", return_value="https://box.nju.edu.cn/seafhttp/files/token/paper.pdf?x=1")
-    @patch("apps.box_upload.services.http.client.HTTPSConnection")
-    def test_stream_from_nju_box_forwards_range_and_closes_connection(self, connection_class, get_link):
-        connection = connection_class.return_value
-        upstream_response = MagicMock()
-        upstream_response.status = 206
-        upstream_response.getheaders.return_value = [
-            ("Content-Length", "8"),
-            ("Content-Range", "bytes 0-7/100"),
-        ]
-        upstream_response.read.side_effect = [b"%PDF-1.7", b""]
-        connection.getresponse.return_value = upstream_response
-
-        stream = stream_from_nju_box("/paper.pdf", byte_range="bytes=0-7")
-
-        self.assertEqual(b"".join(stream.iter_chunks()), b"%PDF-1.7")
-        connection.request.assert_called_once_with(
-            "GET",
-            "/seafhttp/files/token/paper.pdf?x=1",
-            headers={"Accept": "application/pdf", "Range": "bytes=0-7"},
-        )
-        self.assertEqual(stream.status, 206)
-        self.assertEqual(stream.get_header("Content-Range"), "bytes 0-7/100")
-        upstream_response.close.assert_called_once_with()
-        connection.close.assert_called_once_with()
+    def test_retired_nju_box_stream_raises_without_network_access(self):
+        with self.assertRaisesMessage(NjuBoxUploadError, "retired"):
+            stream_from_nju_box("/paper.pdf", byte_range="bytes=0-7")
 
     @patch("apps.box_upload.admin.delete_literature")
     def test_staff_user_can_delete_upload_record_from_admin(self, delete_file):
@@ -1134,6 +1110,7 @@ class UploadPageTests(TestCase):
         self.assertEqual(delete_file.call_args.args[0].remote_path, "/keep-on-failure.pdf")
         self.assertTrue(UploadedDocument.objects.filter(pk=document.pk).exists())
 
+    @skip("NJU Box backend retired")
     @patch("apps.box_upload.services._upload_file")
     @patch("apps.box_upload.services._request")
     @patch.dict("os.environ", {
@@ -1160,6 +1137,7 @@ class UploadPageTests(TestCase):
         self.assertEqual(upload_file.call_count, 1)
         self.assertIn("ret-json=1", upload_file.call_args.args[0])
 
+    @skip("NJU Box backend retired")
     @patch("apps.box_upload.services._upload_file")
     @patch("apps.box_upload.services._request")
     @patch.dict("os.environ", {
@@ -1188,6 +1166,7 @@ class UploadPageTests(TestCase):
         self.assertIn("existing=1", upload_file.call_args.args[0])
         self.assertIn("ret-json=1", upload_file.call_args.args[0])
 
+    @skip("NJU Box backend retired")
     @patch("apps.box_upload.services._upload_file")
     @patch("apps.box_upload.services._request")
     @patch.dict("os.environ", {
@@ -1213,11 +1192,13 @@ class UploadPageTests(TestCase):
         self.assertIn("Token env-token", request.call_args_list[0].args[2]["Authorization"])
         self.assertIn(b"password=env-password", request.call_args_list[0].args[3])
 
+    @skip("NJU Box backend retired")
     @patch.dict("os.environ", {}, clear=True)
     def test_upload_requires_repository_configuration(self):
         with self.assertRaises(NjuBoxUploadError):
             upload_to_nju_box(SimpleUploadedFile("test.pdf", b"pdf"), "api-token", "library-password")
 
+    @skip("NJU Box backend retired")
     @patch("apps.box_upload.services._request")
     @patch.dict("os.environ", {
         "NJU_BOX_API_URL": "https://box.nju.edu.cn",
@@ -1237,6 +1218,7 @@ class UploadPageTests(TestCase):
         self.assertEqual(delete_call.args[1], "DELETE")
         self.assertIn("p=%2Ffolder%2Fa+paper.pdf", delete_call.args[0])
 
+    @skip("NJU Box backend retired")
     @patch("apps.box_upload.services._request")
     @patch.dict("os.environ", {
         "NJU_BOX_API_URL": "https://box.nju.edu.cn",
@@ -1252,6 +1234,7 @@ class UploadPageTests(TestCase):
         delete_from_nju_box("/paper.pdf", "api-token", "library-password")
         self.assertEqual(request.call_args_list[2].args[1], "DELETE")
 
+    @skip("NJU Box backend retired")
     @patch("apps.box_upload.services._request")
     @patch.dict("os.environ", {"NJU_BOX_API_URL": "https://box.nju.edu.cn", "NJU_BOX_REPOSITORY_ID": "repo-id"}, clear=False)
     def test_ensure_directory_creates_missing_path(self, request):

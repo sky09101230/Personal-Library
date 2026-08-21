@@ -23,8 +23,9 @@ class NasWebDavLiteratureStorageTests(SimpleTestCase):
         self.assertEqual(get_literature_storage().name, NAS_WEBDAV)
 
     @patch.dict(os.environ, {"LITERATURE_STORAGE_BACKEND": NJU_BOX}, clear=False)
-    def test_nju_box_requires_explicit_selection(self):
-        self.assertEqual(get_literature_storage().name, NJU_BOX)
+    def test_nju_box_selection_is_retired(self):
+        with self.assertRaisesMessage(LiteratureStorageError, "retired"):
+            get_literature_storage()
 
     def test_rejects_missing_configuration(self):
         with patch.dict(os.environ, {}, clear=True):

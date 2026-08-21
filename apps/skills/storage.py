@@ -1,7 +1,7 @@
 import os
 
-from apps.box_upload.services import LiteratureStorageError, stream_from_nju_box
-from apps.box_upload.storage import NAS_WEBDAV, NJU_BOX, NasWebDavLiteratureStorage
+from apps.box_upload.services import LiteratureStorageError
+from apps.box_upload.storage import NAS_WEBDAV, NasWebDavLiteratureStorage
 
 
 def get_nas_skill_storage():
@@ -22,11 +22,6 @@ def get_nas_skill_candidate_storage():
 def open_skill_stream(release):
     if release.storage_backend == NAS_WEBDAV:
         return get_nas_skill_storage().open_stream(release.archive_remote_path)
-    if release.storage_backend == NJU_BOX:
-        return stream_from_nju_box(
-            release.archive_remote_path,
-            library_password=os.environ.get("NJU_SKILLS_LIBRARY_PASSWORD")
-            or os.environ.get("NJU_BOX_LIBRARY_PASSWORD"),
-            repository_id=release.repository_id or os.environ.get("NJU_SKILLS_REPOSITORY_ID"),
-        )
+    if release.storage_backend == "nju_box":
+        raise LiteratureStorageError("NJU Box Skill storage has been retired; use NAS WebDAV.")
     raise LiteratureStorageError(f"Unsupported Skill storage backend: {release.storage_backend}.")

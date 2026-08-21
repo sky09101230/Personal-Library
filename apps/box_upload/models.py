@@ -95,7 +95,6 @@ class ZoteroConnection(models.Model):
 
 class UploadedDocument(models.Model):
     class StorageBackend(models.TextChoices):
-        NJU_BOX = "nju_box", "NJU Box"
         NAS_WEBDAV = "nas_webdav", "NAS WebDAV"
 
     class Status(models.TextChoices):
@@ -114,7 +113,7 @@ class UploadedDocument(models.Model):
     storage_backend = models.CharField(
         max_length=32,
         choices=StorageBackend.choices,
-        default=StorageBackend.NJU_BOX,
+        default=StorageBackend.NAS_WEBDAV,
         db_index=True,
     )
     sha256 = models.CharField(max_length=64, db_index=True)

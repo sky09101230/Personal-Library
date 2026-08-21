@@ -9,15 +9,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from urllib.parse import quote, urlsplit
 
-from .services import (
-    LiteratureStorageError,
-    delete_from_nju_box,
-    stream_from_nju_box,
-    upload_to_nju_box,
-)
+from .services import LiteratureStorageError
 
 
-NJU_BOX = "nju_box"
+NJU_BOX = "nju_box"  # 历史数据库值；运行时已废弃。
 NAS_WEBDAV = "nas_webdav"
 _SAFE_EXTENSION = re.compile(r"^\.[A-Za-z0-9]{1,10}$")
 
@@ -42,19 +37,6 @@ class LiteratureStorage(ABC):
     @abstractmethod
     def delete(self, remote_path):
         raise NotImplementedError
-
-
-class NjuBoxLiteratureStorage(LiteratureStorage):
-    name = NJU_BOX
-
-    def upload(self, uploaded_file):
-        return upload_to_nju_box(uploaded_file)
-
-    def open_stream(self, remote_path, byte_range=None):
-        return stream_from_nju_box(remote_path, byte_range=byte_range)
-
-    def delete(self, remote_path):
-        delete_from_nju_box(remote_path)
 
 
 class NasWebDavLiteratureStorage(LiteratureStorage):
@@ -219,7 +201,7 @@ def get_literature_storage(backend=None):
     if backend == NAS_WEBDAV:
         return NasWebDavLiteratureStorage()
     if backend == NJU_BOX:
-        return NjuBoxLiteratureStorage()
+        raise LiteratureStorageError("NJU Box storage backend has been retired; use NAS WebDAV.")
     raise LiteratureStorageError(f"Unsupported literature storage backend: {backend}.")
 
 

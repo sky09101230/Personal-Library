@@ -1,5 +1,6 @@
 from django.contrib.auth.models import User
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.utils import timezone
@@ -407,39 +408,10 @@ class SkillEnrichmentTests(TestCase):
         self.assertEqual(context.exception.code, "invalid_summary")
 
 
-class SkillArchiveMigrationTests(TestCase):
-    @patch("apps.skills.management.commands.migrate_skill_archives_to_nas.open_skill_stream")
-    @patch("apps.skills.management.commands.migrate_skill_archives_to_nas.get_nas_skill_storage")
-    def test_migration_updates_record_only_after_valid_zip_upload(self, get_storage, open_stream):
-        source = GitHubSkillSource.objects.create(
-            name="Test source", slug="test-source", repository_url="https://github.com/example/test.git"
-        )
-        skill = SharedSkill.objects.create(
-            source=source, slug="demo", name="Demo", description="", source_path="demo"
-        )
-        payload = BytesIO()
-        with zipfile.ZipFile(payload, "w") as archive:
-            archive.writestr("demo/SKILL.md", "---\nname: demo\n---\n")
-        content = payload.getvalue()
-        release = SharedSkillRelease.objects.create(
-            skill=skill,
-            git_commit="c" * 40,
-            repository_id="legacy-repository",
-            archive_name="demo.zip",
-            archive_remote_path="/legacy/demo.zip",
-            archive_size=len(content),
-        )
-        upstream = MagicMock()
-        upstream.iter_chunks.return_value = iter((content,))
-        open_stream.return_value = upstream
-        get_storage.return_value.upload.return_value = "/public/PLAB_KnowledgeBase/Skills/new.zip"
-
-        call_command("migrate_skill_archives_to_nas")
-        release.refresh_from_db()
-
-        self.assertEqual(release.storage_backend, "nas_webdav")
-        self.assertEqual(release.repository_id, "")
-        self.assertEqual(release.archive_remote_path, "/public/PLAB_KnowledgeBase/Skills/new.zip")
+class RetiredSkillArchiveMigrationTests(TestCase):
+    def test_migration_command_is_retired(self):
+        with self.assertRaisesMessage(CommandError, "retired"):
+            call_command("migrate_skill_archives_to_nas")
 
 
 class SkillSyncJobViewTests(TestCase):
