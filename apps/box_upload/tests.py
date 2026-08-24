@@ -205,7 +205,7 @@ class UploadPageTests(TestCase):
         self.assertContains(response, '<table class="literature-table">')
         self.assertContains(response, "One canonical paper", count=1)
         self.assertNotContains(response, "Summary visible only in Library")
-        self.assertContains(self.client.get("/library/"), "Summary visible only in Library")
+        self.assertNotContains(self.client.get("/library/"), "Summary visible only in Library")
 
     def test_upload_history_only_shows_current_user_records(self):
         canonical = CanonicalDocument.objects.create(sha256="a" * 64)
@@ -451,11 +451,11 @@ class UploadPageTests(TestCase):
 
         response = self.client.get("/library/")
 
-        for heading in ("标题", "作者", "期刊与年份", "摘要", "状态", "文献操作", "PDF 附件"):
+        for heading in ("标题", "作者", "期刊与年份", "状态", "文献操作", "PDF 附件"):
             self.assertContains(response, heading)
-        for value in ("Complete metadata paper", "Author Four", "Complete abstract text.", "10.1000/complete", "Complete Journal", "2026", "在线打开", "下载"):
+        for value in ("Complete metadata paper", "Author Four", "10.1000/complete", "Complete Journal", "2026", "在线打开", "下载"):
             self.assertContains(response, value)
-        for removed in ("user-tag", "source-tag", "ai-tag", "complete.pdf", "/complete.pdf", "123456", "查看完整证据", "外部引用"):
+        for removed in ("Complete abstract text.", "user-tag", "source-tag", "ai-tag", "complete.pdf", "/complete.pdf", "123456", "查看完整证据", "外部引用"):
             self.assertNotContains(response, removed)
         self.assertContains(response, "元数据需处理")
         self.assertContains(response, "不完整、待复核或冲突")
@@ -464,7 +464,7 @@ class UploadPageTests(TestCase):
         self.assertContains(response, "PDF 上传成功即发布")
         self.assertContains(response, "PDF 上传成功后会立即向 Agent 发布")
         html = response.content.decode()
-        self.assertLess(html.index(">摘要</th>"), html.index(">状态</th>"))
+        self.assertNotIn(">摘要</th>", html)
         self.assertLess(html.index(">状态</th>"), html.index(">文献操作</th>"))
         self.assertLess(html.index(">文献操作</th>"), html.index(">PDF 附件</th>"))
 

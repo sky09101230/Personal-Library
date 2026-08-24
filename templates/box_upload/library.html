@@ -5,7 +5,7 @@
 <div class="page-head">
   <p class="eyebrow">{% if is_my_uploads %}My Library{% else %}PLAB Literature{% endif %}</p>
   <h1>{% if is_my_uploads %}我的文献{% else %}文献库{% endif %}</h1>
-  <p class="subtle">{% if is_my_uploads %}包括你实际上传的 PDF，也包括通过 DOI 或 Zotero 关联到你的文献；你只能审核和删除自己实际提交的附件。{% else %}集中查看核心 metadata、摘要、处理状态和常用操作；待复核内容不会自动进入 Agent 上下文。{% endif %}</p>
+  <p class="subtle">{% if is_my_uploads %}包括你实际上传的 PDF，也包括通过 DOI 或 Zotero 关联到你的文献；你只能审核和删除自己实际提交的附件。{% else %}集中查看核心 metadata、处理状态和常用操作；待复核内容不会自动进入 Agent 上下文。{% endif %}</p>
 </div>
 {% if messages %}{% for message in messages %}<div class="notice{% if message.tags == 'error' %} error{% endif %}" role="status">{{ message }}</div>{% endfor %}{% endif %}
 <section class="library-summary" aria-label="{% if is_my_uploads %}我的文献摘要{% else %}文献库摘要{% endif %}">
@@ -31,7 +31,7 @@
   </form>
   <div><a href="{% url 'box-upload' %}">上传 PDF</a> · <a href="{% url 'zotero-import' %}">从 Zotero 导入</a></div>
 </div>
-{% include "box_upload/_literature_table.html" with literatures=page.object_list table_id="literature-table" show_abstract=True %}
+{% include "box_upload/_literature_table.html" with literatures=page.object_list table_id="literature-table" show_abstract=False %}
 {% if page.has_other_pages %}
 <nav class="pager" aria-label="文献库分页"><span>第 {{ page.number }} / {{ page.paginator.num_pages }} 页</span><span class="pager-nav">{% if page.has_previous %}<a href="?{% if pagination_query %}{{ pagination_query }}&{% endif %}page={{ page.previous_page_number }}">上一页</a>{% endif %}{% if page.has_next %}<a href="?{% if pagination_query %}{{ pagination_query }}&{% endif %}page={{ page.next_page_number }}">下一页</a>{% endif %}</span></nav>
 {% endif %}
