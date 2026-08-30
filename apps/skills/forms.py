@@ -37,7 +37,7 @@ class SkillDescriptionForm(forms.Form):
 class SkillCandidateUploadForm(forms.Form):
     archive = forms.FileField(
         label="Skill ZIP",
-        help_text="一个 ZIP 只能包含一个 Skill，系统会自动检查格式并建议分类。",
+        help_text="一个 ZIP 只能包含一个 Skill，最大 800 MiB；系统会自动检查格式并建议分类。",
         widget=forms.ClearableFileInput(attrs={"accept": ".zip,application/zip"}),
     )
 

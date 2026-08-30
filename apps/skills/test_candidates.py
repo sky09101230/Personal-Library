@@ -10,6 +10,9 @@ from django.test import TestCase
 from .candidate_services import (
     CandidatePublishError,
     CandidateValidationError,
+    MAX_ARCHIVE_SIZE,
+    MAX_IN_MEMORY_ARCHIVE_SIZE,
+    MAX_UNCOMPRESSED_SIZE,
     _scan_source,
     create_uploaded_candidate,
     enrich_candidate,
@@ -30,6 +33,30 @@ def skill_zip(files, name="skill.zip"):
 
 
 class CandidateArchiveTests(TestCase):
+    def test_zip_size_limits_are_800_mib_and_inclusive(self):
+        self.assertEqual(MAX_ARCHIVE_SIZE, 800 * 1024 * 1024)
+        self.assertEqual(MAX_UNCOMPRESSED_SIZE, MAX_ARCHIVE_SIZE)
+        self.assertEqual(MAX_IN_MEMORY_ARCHIVE_SIZE, 10 * 1024 * 1024)
+        archive = skill_zip({"demo/SKILL.md": "# Demo"})
+        archive.size = MAX_ARCHIVE_SIZE
+
+        inspect_skill_zip(archive)
+
+        archive.size = MAX_ARCHIVE_SIZE + 1
+        with self.assertRaisesMessage(CandidateValidationError, "ZIP 不能超过 800 MiB。"):
+            inspect_skill_zip(archive)
+
+    def test_uncompressed_size_limit_is_inclusive(self):
+        document = "# Demo"
+        archive = skill_zip({"demo/SKILL.md": document})
+        with patch("apps.skills.candidate_services.MAX_UNCOMPRESSED_SIZE", len(document)):
+            inspect_skill_zip(archive)
+        with (
+            patch("apps.skills.candidate_services.MAX_UNCOMPRESSED_SIZE", len(document) - 1),
+            self.assertRaisesMessage(CandidateValidationError, "ZIP 解压后的总大小不能超过 800 MiB。"),
+        ):
+            inspect_skill_zip(archive)
+
     def test_valid_zip_uses_multiline_metadata(self):
         archive = skill_zip({
             "demo/SKILL.md": "---\nname: demo-skill\ndescription: >\n  First line\n  second line\n---\n# Demo",

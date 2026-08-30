@@ -28,10 +28,11 @@ from .services import (
 from .storage import get_nas_skill_candidate_storage, get_nas_skill_storage
 
 
-MAX_ARCHIVE_SIZE = 10 * 1024 * 1024
+MAX_ARCHIVE_SIZE = 800 * 1024 * 1024
 MAX_MEMBER_COUNT = 200
-MAX_UNCOMPRESSED_SIZE = 50 * 1024 * 1024
+MAX_UNCOMPRESSED_SIZE = 800 * 1024 * 1024
 MAX_SKILL_DOCUMENT_SIZE = 1024 * 1024
+MAX_IN_MEMORY_ARCHIVE_SIZE = 10 * 1024 * 1024
 FORBIDDEN_NAMES = {".env", "credentials", "credentials.json", "id_rsa", "id_ed25519"}
 FORBIDDEN_EXTENSIONS = {
     ".pdf", ".csv", ".tsv", ".xls", ".xlsx", ".sqlite", ".sqlite3", ".db",
@@ -57,7 +58,7 @@ class CandidatePublishError(Exception):
 
 def inspect_skill_zip(uploaded_file):
     if uploaded_file.size > MAX_ARCHIVE_SIZE:
-        raise CandidateValidationError("ZIP 不能超过 10 MiB。")
+        raise CandidateValidationError("ZIP 不能超过 800 MiB。")
     uploaded_file.seek(0)
     try:
         archive = zipfile.ZipFile(uploaded_file)
@@ -71,7 +72,7 @@ def inspect_skill_zip(uploaded_file):
         if not members or len(members) > MAX_MEMBER_COUNT:
             raise CandidateValidationError("ZIP 必须包含 1 至 200 个文件。")
         if sum(member.file_size for member in members) > MAX_UNCOMPRESSED_SIZE:
-            raise CandidateValidationError("ZIP 解压后的总大小不能超过 50 MiB。")
+            raise CandidateValidationError("ZIP 解压后的总大小不能超过 800 MiB。")
         skill_members = []
         seen_paths = set()
         content_digest = hashlib.sha256()
@@ -390,7 +391,7 @@ def publish_candidate(candidate, reviewer, formal_storage=None, candidate_storag
         formal_storage.ensure_root()
         stream = candidate_storage.open_stream(candidate.archive_remote_path)
         archive_name = candidate.original_name or f"{candidate.slug}-{candidate.content_sha256[:12]}.zip"
-        with tempfile.SpooledTemporaryFile(max_size=MAX_ARCHIVE_SIZE) as temporary:
+        with tempfile.SpooledTemporaryFile(max_size=MAX_IN_MEMORY_ARCHIVE_SIZE) as temporary:
             for chunk in stream.iter_chunks():
                 temporary.write(chunk)
             temporary.seek(0)
