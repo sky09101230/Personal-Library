@@ -8,7 +8,13 @@ from django.conf import settings
 from django.test import Client, TransactionTestCase, override_settings
 from starlette.testclient import TestClient
 
-from apps.box_upload.models import CanonicalDocument, UploadedDocument
+from apps.box_upload.models import (
+    CanonicalDocument,
+    MetadataProposal,
+    UploadedDocument,
+    UploadReviewBatch,
+    UploadReviewItem,
+)
 from apps.box_upload.storage import NAS_WEBDAV, StoredLiteratureObject
 from apps.mcp_gateway.models import McpAccessToken
 from apps.mcp_gateway.forms import McpAccessTokenForm
@@ -183,36 +189,104 @@ class McpHttpTests(TransactionTestCase):
         self.assertNotEqual(build_download_url.call_args.args[0].pk, supplementary.pk)
 
     @patch(
-        "apps.mcp_gateway.server.store_literature",
-        return_value=StoredLiteratureObject(NAS_WEBDAV, "/public/PLAB_KnowledgeBase/Literature/uploaded.pdf"),
+        "apps.box_upload.upload_review.store_literature",
+        return_value=StoredLiteratureObject(NAS_WEBDAV, "/literature/mcp-staged.pdf"),
     )
-    def test_mcp_uploads_pdf_with_write_scope(self, store_file):
-        pdf_content = b"%PDF-1.7\ncontent"
+    @patch("apps.box_upload.upload_review.extract_pdf_evidence", return_value={
+        "title": "Staged MCP Paper",
+        "authors": [{"name": "Ada Lovelace"}],
+        "doi": "",
+        "doi_candidates": [],
+    })
+    def test_mcp_upload_stages_owned_review_without_formal_records_or_search_visibility(self, extract_evidence, store_file):
+        canonical_count = CanonicalDocument.objects.count()
+        upload_count = UploadedDocument.objects.count()
         self.assertEqual(self._initialize(self.mcp_client).status_code, 200)
         response = self._call(self.mcp_client, "upload_literature", {
-            "filename": "uploaded.pdf",
-            "content_base64": base64.b64encode(pdf_content).decode("ascii"),
+            "filename": "mcp-staged.pdf",
+            "content_base64": base64.b64encode(b"%PDF-1.7\ncontent").decode("ascii"),
             "content_type": "application/pdf",
         })
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("上传成功", self._tool_text(response))
-        self.assertTrue(UploadedDocument.objects.filter(
-            original_name="uploaded.pdf",
-            remote_path="/public/PLAB_KnowledgeBase/Literature/uploaded.pdf",
-            storage_backend=NAS_WEBDAV,
-        ).exists())
-        uploaded = UploadedDocument.objects.get(original_name="uploaded.pdf")
-        self.assertEqual(
-            uploaded.canonical_document.index_status,
-            CanonicalDocument.IndexStatus.PUBLISHED,
-        )
+        batch = UploadReviewBatch.objects.get()
+        item = batch.items.get()
+        result = self._tool_text(response)
+        self.assertIn("状态: pending_review", result)
+        self.assertIn(f"Batch ID: {batch.pk}", result)
+        self.assertIn(f"网页审核地址: {settings.MCP_PUBLIC_BASE_URL}/upload/?batch={batch.pk}", result)
+        self.assertIn("Staged MCP Paper", result)
+        self.assertEqual(batch.uploader, self.user)
+        self.assertEqual(item.original_name, "mcp-staged.pdf")
+        self.assertEqual(CanonicalDocument.objects.count(), canonical_count)
+        self.assertEqual(UploadedDocument.objects.count(), upload_count)
+        self.assertFalse(MetadataProposal.objects.exists())
+        listed = self._call(self.mcp_client, "list_literature", {"query": "mcp-staged.pdf"})
+        self.assertIn("共 0 条", self._tool_text(listed))
+        extract_evidence.assert_called_once()
         store_file.assert_called_once()
 
-        listed = self._call(self.mcp_client, "list_literature", {"query": "uploaded.pdf"})
+    @patch(
+        "apps.box_upload.upload_review.store_literature",
+        return_value=StoredLiteratureObject(NAS_WEBDAV, "/literature/owned-review.pdf"),
+    )
+    @patch("apps.box_upload.upload_review.extract_pdf_evidence", return_value={
+        "title": "Owned Review",
+        "authors": [],
+        "doi": "",
+        "doi_candidates": [],
+    })
+    def test_mcp_uploader_can_open_review_page_but_other_user_gets_404(self, extract_evidence, store_file):
+        self.assertEqual(self._initialize(self.mcp_client).status_code, 200)
+        self._call(self.mcp_client, "upload_literature", {
+            "filename": "owned-review.pdf",
+            "content_base64": base64.b64encode(b"%PDF-1.7\nowned").decode("ascii"),
+            "content_type": "application/pdf",
+        })
+        batch = UploadReviewBatch.objects.get()
+        web = Client()
+        web.force_login(self.user)
+
+        owner_response = web.get(f"/upload/?batch={batch.pk}")
+        other = User.objects.create_user(username="other-mcp-user", password="Strong-pass-1234")
+        web.force_login(other)
+        other_response = web.get(f"/upload/?batch={batch.pk}")
+
+        self.assertEqual(owner_response.status_code, 200)
+        self.assertContains(owner_response, "owned-review.pdf")
+        self.assertEqual(other_response.status_code, 404)
+
+    @patch(
+        "apps.box_upload.upload_review.store_literature",
+        return_value=StoredLiteratureObject(NAS_WEBDAV, "/literature/confirmed-mcp.pdf"),
+    )
+    @patch("apps.box_upload.upload_review.extract_pdf_evidence", return_value={
+        "title": "Confirmed MCP Paper",
+        "authors": [],
+        "doi": "",
+        "doi_candidates": [],
+    })
+    def test_browser_confirmation_publishes_mcp_upload_for_mcp_search(self, extract_evidence, store_file):
+        self.assertEqual(self._initialize(self.mcp_client).status_code, 200)
+        self._call(self.mcp_client, "upload_literature", {
+            "filename": "confirmed-mcp.pdf",
+            "content_base64": base64.b64encode(b"%PDF-1.7\nconfirmed").decode("ascii"),
+            "content_type": "application/pdf",
+        })
+        batch = UploadReviewBatch.objects.get()
+        web = Client()
+        web.force_login(self.user)
+
+        confirm_response = web.post(f"/upload/batches/{batch.pk}/confirm/")
+
+        self.assertEqual(confirm_response.status_code, 200)
+        uploaded = UploadedDocument.objects.get(original_name="confirmed-mcp.pdf")
+        self.assertEqual(uploaded.uploader, self.user)
+        self.assertEqual(uploaded.canonical_document.index_status, CanonicalDocument.IndexStatus.PUBLISHED)
+        listed = self._call(self.mcp_client, "list_literature", {"query": "Confirmed MCP Paper"})
         self.assertIn(f"文献 ID: {uploaded.canonical_document_id}", self._tool_text(listed))
 
-    @patch("apps.mcp_gateway.server.store_literature")
+    @patch("apps.box_upload.upload_review.store_literature")
     def test_mcp_rejects_invalid_pdf_before_storage(self, store_file):
         self.assertEqual(self._initialize(self.mcp_client).status_code, 200)
 
@@ -227,7 +301,7 @@ class McpHttpTests(TransactionTestCase):
         store_file.assert_not_called()
 
     @override_settings(MCP_MAX_UPLOAD_BYTES=12)
-    @patch("apps.mcp_gateway.server.store_literature")
+    @patch("apps.box_upload.upload_review.store_literature")
     def test_mcp_rejects_oversized_pdf_before_storage(self, store_file):
         self.assertEqual(self._initialize(self.mcp_client).status_code, 200)
 
@@ -240,54 +314,90 @@ class McpHttpTests(TransactionTestCase):
         self.assertTrue(response.json()["result"].get("isError"))
         store_file.assert_not_called()
 
-    @patch("apps.mcp_gateway.server.extract_pdf_evidence", return_value={"doi": "10.1000/existing"})
+    @patch("apps.box_upload.upload_review.delete_literature")
     @patch(
-        "apps.mcp_gateway.server.store_literature",
-        return_value=StoredLiteratureObject(NAS_WEBDAV, "/literature/existing-doi.pdf"),
+        "apps.box_upload.upload_review.store_literature",
+        return_value=StoredLiteratureObject(NAS_WEBDAV, "/literature/duplicate-stage.pdf"),
     )
-    def test_mcp_reuses_existing_doi_canonical_and_publishes_it(self, store_file, extract_evidence):
-        existing = CanonicalDocument.objects.create(doi="10.1000/existing", title="Existing DOI")
-        before_count = CanonicalDocument.objects.count()
+    @patch("apps.box_upload.upload_review.extract_pdf_evidence", return_value={
+        "title": "Duplicate PDF",
+        "authors": [],
+        "doi": "",
+        "doi_candidates": [],
+    })
+    def test_confirmed_mcp_duplicate_reuses_body_and_associates_token_owner(self, extract_evidence, store_file, delete_literature):
+        content = b"%PDF-1.7\nduplicate"
+        original_uploader = User.objects.create_user(username="original-owner", password="Strong-pass-1234")
+        existing = CanonicalDocument.objects.create(
+            sha256=hashlib.sha256(content).hexdigest(),
+            title="Existing Duplicate",
+            metadata_status=CanonicalDocument.MetadataStatus.VERIFIED,
+            index_status=CanonicalDocument.IndexStatus.PUBLISHED,
+        )
+        UploadedDocument.objects.create(
+            canonical_document=existing,
+            uploader=original_uploader,
+            original_name="original.pdf",
+            remote_path="/literature/original.pdf",
+            sha256=existing.sha256,
+            size=len(content),
+        )
+        upload_count = UploadedDocument.objects.count()
         self.assertEqual(self._initialize(self.mcp_client).status_code, 200)
-
-        response = self._call(self.mcp_client, "upload_literature", {
-            "filename": "existing-doi.pdf",
-            "content_base64": base64.b64encode(b"%PDF-1.7\nexisting DOI").decode("ascii"),
-            "content_type": "application/pdf",
-        })
-
-        self.assertIn("上传成功", self._tool_text(response))
-        existing.refresh_from_db()
-        self.assertEqual(CanonicalDocument.objects.count(), before_count)
-        self.assertEqual(existing.index_status, CanonicalDocument.IndexStatus.PUBLISHED)
-        self.assertTrue(existing.uploads.filter(original_name="existing-doi.pdf").exists())
-        extract_evidence.assert_called_once()
-        store_file.assert_called_once()
-
-    @patch("apps.mcp_gateway.server.extract_pdf_evidence", return_value={"doi": None})
-    @patch(
-        "apps.mcp_gateway.server.store_literature",
-        return_value=StoredLiteratureObject(NAS_WEBDAV, "/literature/existing-sha.pdf"),
-    )
-    def test_mcp_reuses_sha_canonical_when_pdf_has_no_doi(self, store_file, extract_evidence):
-        content = b"%PDF-1.7\nexisting SHA"
-        existing = CanonicalDocument.objects.create(sha256=hashlib.sha256(content).hexdigest())
-        before_count = CanonicalDocument.objects.count()
-        self.assertEqual(self._initialize(self.mcp_client).status_code, 200)
-
-        response = self._call(self.mcp_client, "upload_literature", {
-            "filename": "existing-sha.pdf",
+        self._call(self.mcp_client, "upload_literature", {
+            "filename": "duplicate.pdf",
             "content_base64": base64.b64encode(content).decode("ascii"),
             "content_type": "application/pdf",
         })
+        batch = UploadReviewBatch.objects.get()
+        web = Client()
+        web.force_login(self.user)
 
-        self.assertIn("上传成功", self._tool_text(response))
+        response = web.post(f"/upload/batches/{batch.pk}/confirm/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["results"][0]["state"], "merged")
         existing.refresh_from_db()
-        self.assertEqual(CanonicalDocument.objects.count(), before_count)
-        self.assertEqual(existing.index_status, CanonicalDocument.IndexStatus.PUBLISHED)
-        self.assertTrue(existing.uploads.filter(original_name="existing-sha.pdf").exists())
-        extract_evidence.assert_called_once()
-        store_file.assert_called_once()
+        self.assertEqual(UploadedDocument.objects.count(), upload_count)
+        self.assertTrue(existing.uploaders.filter(pk=self.user.pk).exists())
+        delete_literature.assert_called_once()
+
+    @patch(
+        "apps.box_upload.upload_review.store_literature",
+        return_value=StoredLiteratureObject(NAS_WEBDAV, "/literature/title-warning.pdf"),
+    )
+    @patch("apps.box_upload.upload_review.fetch_doi_bibtex", return_value=(
+        "@article{wrong, title={Unrelated DOI Work}, author={Lovelace, Ada}, "
+        "journal={Journal of Tests}, year={2026}, doi={10.1000/warning}}"
+    ))
+    @patch("apps.box_upload.upload_review.extract_pdf_evidence", return_value={
+        "title": "PDF Extracted Work",
+        "authors": [],
+        "doi": "10.1000/warning",
+        "doi_candidates": [{"doi": "10.1000/warning", "source": "pdf_page", "page": 1}],
+    })
+    def test_mcp_returns_non_blocking_doi_title_warning(self, extract_evidence, fetch_bibtex, store_file):
+        self.assertEqual(self._initialize(self.mcp_client).status_code, 200)
+        response = self._call(self.mcp_client, "upload_literature", {
+            "filename": "title-warning.pdf",
+            "content_base64": base64.b64encode(b"%PDF-1.7\nwarning").decode("ascii"),
+            "content_type": "application/pdf",
+        })
+
+        result = self._tool_text(response)
+        item = UploadReviewItem.objects.get(original_name="title-warning.pdf")
+        self.assertIn("DOI/BibTeX 标题与 PDF 提取标题明显不一致", result)
+        self.assertIn("PDF Extracted Work", result)
+        self.assertIn("Unrelated DOI Work", result)
+        self.assertEqual(item.evidence["bibtex"]["title"], "Unrelated DOI Work")
+        web = Client()
+        web.force_login(self.user)
+        confirm_response = web.post(f"/upload/batches/{item.batch_id}/confirm/")
+        self.assertEqual(confirm_response.status_code, 200)
+        self.assertEqual(
+            CanonicalDocument.objects.get(title="Unrelated DOI Work").index_status,
+            CanonicalDocument.IndexStatus.PUBLISHED,
+        )
 
     def test_mcp_enforces_tool_scope(self):
         limited_token, limited_plaintext = McpAccessToken.issue(

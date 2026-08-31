@@ -10,7 +10,9 @@ from .ingestion import PdfValidationError, associate_existing_pdf, prepare_pdf
 from .metadata import (
     BIBTEX_EVIDENCE_LIMIT,
     DOI_PATTERN,
+    DOI_TITLE_MATCH_THRESHOLD,
     MetadataResolutionError,
+    _title_similarity,
     extract_pdf_evidence,
     fetch_doi_bibtex,
     normalize_doi,
@@ -33,13 +35,34 @@ def _issue_for(metadata):
     return "ready"
 
 
-def _serialize_item(item):
+def _warnings_for(metadata, evidence):
+    warnings = []
+    if not str(metadata.get("journal") or "").strip():
+        warnings.append({
+            "code": "missing_journal",
+            "message": "缺少期刊",
+        })
+    pdf_title = str((evidence.get("pdf") or {}).get("title") or "").strip()
+    doi_title = str((evidence.get("bibtex") or {}).get("title") or "").strip()
+    if pdf_title and doi_title and _title_similarity(pdf_title, doi_title) < DOI_TITLE_MATCH_THRESHOLD:
+        warnings.append({
+            "code": "doi_title_mismatch",
+            "message": "DOI/BibTeX 标题与 PDF 提取标题明显不一致",
+            "pdf_title": pdf_title,
+            "doi_title": doi_title,
+        })
+    return warnings
+
+
+def serialize_review_item(item):
     metadata = item.metadata or {}
+    warnings = _warnings_for(metadata, item.evidence or {})
     return {
         "id": item.pk,
         "filename": item.original_name,
         "metadata": metadata,
         "issue": _issue_for(metadata),
+        "warnings": warnings,
     }
 
 
@@ -67,6 +90,7 @@ def _bibtex_preview(doi, raw_bibtex=None):
     metadata["metadata_source"] = "bibtex"
     return metadata, {
         "doi": doi,
+        "title": metadata.get("title") or "",
         "raw": raw_bibtex[:BIBTEX_EVIDENCE_LIMIT],
         "raw_truncated": len(raw_bibtex) > BIBTEX_EVIDENCE_LIMIT,
     }
@@ -116,37 +140,18 @@ def _pending_item(user, item_id, lock=False):
     )
 
 
-@login_required
-@require_GET
-def upload_page(request):
-    return render(request, "box_upload/upload.html", {"form": BoxUploadForm()})
+def create_review_batch(uploader):
+    return UploadReviewBatch.objects.create(uploader=uploader)
 
 
-@login_required
-@require_POST
-def create_batch(request):
-    batch = UploadReviewBatch.objects.create(uploader=request.user)
-    return JsonResponse({"ok": True, "batch_id": batch.pk})
-
-
-@login_required
-@require_POST
-def stage_file(request, batch_id):
-    batch = _pending_batch(request.user, batch_id)
-    uploaded_file = request.FILES.get("file")
-    if uploaded_file is None:
-        return JsonResponse({"ok": False, "message": "请选择 PDF 文件。"}, status=400)
-    try:
-        prepared = prepare_pdf(uploaded_file)
-        metadata, evidence = _preview_pdf(prepared.uploaded_file)
-        stored = store_literature(prepared.uploaded_file)
-    except (PdfValidationError, LiteratureStorageError) as exc:
-        return JsonResponse({"ok": False, "filename": uploaded_file.name, "message": str(exc)}, status=400)
-
+def stage_pdf_for_review(batch, uploaded_file):
+    prepared = prepare_pdf(uploaded_file)
+    metadata, evidence = _preview_pdf(prepared.uploaded_file)
+    stored = store_literature(prepared.uploaded_file)
     try:
         with transaction.atomic():
-            batch = _pending_batch(request.user, batch_id, lock=True)
-            item = UploadReviewItem.objects.create(
+            batch = _pending_batch(batch.uploader, batch.pk, lock=True)
+            return UploadReviewItem.objects.create(
                 batch=batch,
                 original_name=prepared.filename,
                 remote_path=stored.remote_path,
@@ -162,32 +167,23 @@ def stage_file(request, batch_id):
         except LiteratureStorageError:
             pass
         raise
-    return JsonResponse({"ok": True, "item": _serialize_item(item)})
 
 
-@login_required
-@require_POST
-def update_item(request, item_id):
-    action = request.POST.get("action")
-    if action == "save_title":
-        with transaction.atomic():
-            item = _pending_item(request.user, item_id, lock=True)
-            metadata = dict(item.metadata or {})
-            metadata["title"] = " ".join(request.POST.get("title", "").split())[:500]
-            item.metadata = metadata
-            item.save(update_fields=("metadata", "updated_at"))
-        return JsonResponse({"ok": True, "item": _serialize_item(item)})
-    if action != "reparse_doi":
-        return JsonResponse({"ok": False, "message": "无效的 metadata 操作。"}, status=400)
-
-    _pending_item(request.user, item_id)
-    doi = normalize_doi(request.POST.get("doi"))
-    try:
-        resolved, bibtex_evidence = _bibtex_preview(doi)
-    except MetadataResolutionError as exc:
-        return JsonResponse({"ok": False, "message": str(exc)}, status=400)
+def save_review_item_title(item, title):
     with transaction.atomic():
-        item = _pending_item(request.user, item_id, lock=True)
+        item = _pending_item(item.batch.uploader, item.pk, lock=True)
+        metadata = dict(item.metadata or {})
+        metadata["title"] = " ".join(title.split())[:500]
+        item.metadata = metadata
+        item.save(update_fields=("metadata", "updated_at"))
+    return item
+
+
+def reparse_review_item(item, doi):
+    doi = normalize_doi(doi)
+    resolved, bibtex_evidence = _bibtex_preview(doi)
+    with transaction.atomic():
+        item = _pending_item(item.batch.uploader, item.pk, lock=True)
         metadata = dict(item.metadata or {})
         metadata.update(resolved)
         metadata["doi"] = doi
@@ -198,7 +194,59 @@ def update_item(request, item_id):
         item.metadata = metadata
         item.evidence = evidence
         item.save(update_fields=("metadata", "evidence", "updated_at"))
-    return JsonResponse({"ok": True, "item": _serialize_item(item)})
+    return item
+
+
+@login_required
+@require_GET
+def upload_page(request):
+    batch_id = request.GET.get("batch")
+    batch = _pending_batch(request.user, batch_id) if batch_id else None
+    return render(request, "box_upload/upload.html", {
+        "form": BoxUploadForm(),
+        "review_batch_id": batch.pk if batch else None,
+        "review_items": [serialize_review_item(item) for item in batch.items.all()] if batch else [],
+    })
+
+
+@login_required
+@require_POST
+def create_batch(request):
+    batch = create_review_batch(request.user)
+    return JsonResponse({"ok": True, "batch_id": batch.pk})
+
+
+@login_required
+@require_POST
+def stage_file(request, batch_id):
+    batch = _pending_batch(request.user, batch_id)
+    uploaded_file = request.FILES.get("file")
+    if uploaded_file is None:
+        return JsonResponse({"ok": False, "message": "请选择 PDF 文件。"}, status=400)
+    try:
+        item = stage_pdf_for_review(batch, uploaded_file)
+    except (PdfValidationError, LiteratureStorageError) as exc:
+        return JsonResponse({"ok": False, "filename": uploaded_file.name, "message": str(exc)}, status=400)
+    return JsonResponse({"ok": True, "item": serialize_review_item(item)})
+
+
+@login_required
+@require_POST
+def update_item(request, item_id):
+    action = request.POST.get("action")
+    if action == "save_title":
+        item = _pending_item(request.user, item_id)
+        item = save_review_item_title(item, request.POST.get("title", ""))
+        return JsonResponse({"ok": True, "item": serialize_review_item(item)})
+    if action != "reparse_doi":
+        return JsonResponse({"ok": False, "message": "无效的 metadata 操作。"}, status=400)
+
+    item = _pending_item(request.user, item_id)
+    try:
+        item = reparse_review_item(item, request.POST.get("doi"))
+    except MetadataResolutionError as exc:
+        return JsonResponse({"ok": False, "message": str(exc)}, status=400)
+    return JsonResponse({"ok": True, "item": serialize_review_item(item)})
 
 
 def _apply_confirmed_metadata(canonical, item):
@@ -224,21 +272,16 @@ def _apply_confirmed_metadata(canonical, item):
     canonical.save()
 
 
-@login_required
-@require_POST
-def confirm_batch(request, batch_id):
+def confirm_review_batch(batch):
     cleanup_items = []
     with transaction.atomic():
-        batch = _pending_batch(request.user, batch_id, lock=True)
+        batch = _pending_batch(batch.uploader, batch.pk, lock=True)
         items = list(batch.items.select_for_update().all())
         if not items:
-            return JsonResponse({"ok": False, "message": "该批次没有可确认文件。"}, status=400)
+            raise ValueError("该批次没有可确认文件。")
         missing_titles = [item.original_name for item in items if _issue_for(item.metadata or {}) == "missing_title"]
         if missing_titles:
-            return JsonResponse({
-                "ok": False,
-                "message": "仍有文件缺少标题，请先补全：" + "、".join(missing_titles),
-            }, status=400)
+            raise ValueError("仍有文件缺少标题，请先补全：" + "、".join(missing_titles))
 
         results = []
         for item in items:
@@ -252,7 +295,7 @@ def confirm_batch(request, batch_id):
             ).exists():
                 if canonical.metadata_status != CanonicalDocument.MetadataStatus.VERIFIED:
                     _apply_confirmed_metadata(canonical, item)
-                association = associate_existing_pdf(canonical, request.user)
+                association = associate_existing_pdf(canonical, batch.uploader)
                 state = "skipped" if association == "skipped" else "merged"
                 result = {"state": state, "filename": item.original_name}
                 item.commit_result = result
@@ -271,7 +314,7 @@ def confirm_batch(request, batch_id):
             )
             UploadedDocument.objects.create(
                 canonical_document=canonical,
-                uploader=request.user,
+                uploader=batch.uploader,
                 original_name=item.original_name,
                 remote_path=item.remote_path,
                 storage_backend=item.storage_backend,
@@ -300,20 +343,17 @@ def confirm_batch(request, batch_id):
         else:
             result = {**item.commit_result, "cleanup": "deleted"}
         UploadReviewItem.objects.filter(pk=item.pk).update(commit_result=result)
-    return JsonResponse({
-        "ok": True,
+    return {
         "results": results,
         "cleanup_failures": cleanup_failures,
         "message": f"已确认并入库 {len(results)} 个文件。",
-    })
+    }
 
 
-@login_required
-@require_POST
-def cancel_batch(request, batch_id):
+def cancel_review_batch(batch):
     failures = []
     with transaction.atomic():
-        batch = _pending_batch(request.user, batch_id, lock=True)
+        batch = _pending_batch(batch.uploader, batch.pk, lock=True)
         for item in list(batch.items.select_for_update().all()):
             try:
                 delete_literature(item)
@@ -323,6 +363,25 @@ def cancel_batch(request, batch_id):
                 item.delete()
         if not failures:
             batch.delete()
+    return failures
+
+
+@login_required
+@require_POST
+def confirm_batch(request, batch_id):
+    batch = _pending_batch(request.user, batch_id)
+    try:
+        result = confirm_review_batch(batch)
+    except ValueError as exc:
+        return JsonResponse({"ok": False, "message": str(exc)}, status=400)
+    return JsonResponse({"ok": True, **result})
+
+
+@login_required
+@require_POST
+def cancel_batch(request, batch_id):
+    batch = _pending_batch(request.user, batch_id)
+    failures = cancel_review_batch(batch)
     if failures:
         return JsonResponse({
             "ok": False,
