@@ -25,12 +25,12 @@ load_local_env()
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY") or "django-insecure-local-development-only"
 DEBUG = os.environ.get("DJANGO_DEBUG", "false").lower() == "true"
 ALLOWED_HOSTS = [
-    host
+    host.strip()
     for host in (
         os.environ.get("ALLOWED_HOSTS")
         or "localhost,127.0.0.1,propose-reduction-units-confidentiality.trycloudflare.com"
     ).split(",")
-    if host
+    if host.strip()
 ]
 
 INSTALLED_APPS = [
