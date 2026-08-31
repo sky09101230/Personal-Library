@@ -147,6 +147,16 @@ python manage.py collectstatic --noinput
 python -m uvicorn config.asgi:application --host 127.0.0.1 --port 8000
 ```
 
+完成迁移和静态文件收集后，也可以在仓库根目录使用启动脚本；脚本先执行 Django 系统检查，再以前台进程启动 Uvicorn，按 `Ctrl+C` 停止：
+
+```powershell
+.\start.ps1
+# 仅在明确需要局域网直连时：
+.\start.ps1 -BindAddress 0.0.0.0 -Port 8000
+```
+
+脚本不会自动执行迁移或 `collectstatic`，避免普通重启隐式修改数据库或生成文件。
+
 反向代理负责 TLS，并将正确的 `Host`、`Authorization` 和请求体转给 Uvicorn；8000 只监听本机。`ALLOWED_HOSTS`、`MCP_PUBLIC_BASE_URL`、证书域名和代理 Host 必须一致。首次部署后验证：登录页 200、首页可访问、未认证 `/mcp` 返回 401、有效 Token 能列出已发布文献/Skill、短时下载链接能读取有效文件。
 
 日常维护检查：数据库备份可恢复；NAS Literature/Skills 根目录权限仍是最小范围；令牌按人员撤销或轮换；没有把真实资料、数据库备份、向量索引、模型权重或密钥加入 Git；任务失败和暂存批次有可追踪记录；部署前运行完整测试和 `openspec validate --all --strict --no-interactive`（命令不可用时按仓库 OpenSpec 指南处理）。
