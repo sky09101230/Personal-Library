@@ -22,3 +22,16 @@
 - [x] 4.2 Run focused and full SQLite tests, Django migration checks, strict OpenSpec validation and diff checks
 - [ ] 4.3 Verify the upload and review workflow in the local browser at desktop and mobile widths
 - [x] 4.4 Create a scoped Git commit without including unrelated worktree changes
+
+## 5. MCP Shared Review Flow
+
+- [ ] 5.1 Extract thin request-independent staging, confirmation and cancellation services used by the Browser views
+- [ ] 5.2 Route MCP PDF uploads through uploader-owned review batches and return pending review details plus the existing webpage URL
+- [ ] 5.3 Restore an uploader-owned pending batch on the existing upload page while preserving 404 isolation for other users
+- [ ] 5.4 Add non-blocking yellow warnings when DOI/BibTeX and PDF-extracted titles clearly disagree
+
+## 6. MCP Review Verification
+
+- [ ] 6.1 Add focused tests for MCP staging isolation, uploader ownership, browser access, confirmation publication, duplicate reuse and title warnings
+- [ ] 6.2 Run focused and full tests, migration checks, strict OpenSpec validation and diff checks
+- [ ] 6.3 Create scoped Git commits without including unrelated worktree changes
