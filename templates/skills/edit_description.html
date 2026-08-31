@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}编辑 {{ skill.name }} 描述 | PLAB Skills{% endblock %}
+{% block content %}
+<div class="page-head"><p class="eyebrow">管理员编辑</p><h1>{{ skill.name }}</h1><p class="subtle">修改 Skills 广场显示的描述，不改变仓库中的 SKILL.md。</p></div>
+<div class="panel"><div class="field"><strong>DeepSeek 原始摘要</strong><p class="subtle">{{ skill.ai_generated_description|default:"尚无 DeepSeek 摘要。" }}</p></div><form class="skill-description-form" method="post">{% csrf_token %}<div class="field">{{ form.description.label_tag }}{{ form.description }}{% if form.description.help_text %}<p class="help">{{ form.description.help_text }}</p>{% endif %}{{ form.description.errors }}</div><button class="primary" type="submit">保存人工描述</button> <a href="{% url 'skills-source-detail' skill.source.slug skill.slug %}">取消</a></form></div>
+{% endblock %}

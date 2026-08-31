@@ -1,0 +1,10 @@
+{% extends "admin/change_form.html" %}
+
+{% block submit_buttons_bottom %}
+{{ block.super }}
+{% if change %}
+<div class="submit-row">
+    <input type="submit" name="_regenerate_token" value="重新生成令牌（旧令牌立即失效）">
+</div>
+{% endif %}
+{% endblock %}

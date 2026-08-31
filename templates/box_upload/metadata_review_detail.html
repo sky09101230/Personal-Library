@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}检查 AI Metadata | PLAB{% endblock %}
+{% block content %}
+<div class="page-head">
+  <p class="eyebrow">Human confirmation</p>
+  <h1>检查 AI Metadata</h1>
+  <p class="subtle">文献 ID {{ proposal.canonical_document_id }} · {{ proposal.canonical_document.title|default:"未识别标题" }}</p>
+</div>
+<p><a href="{% url 'metadata-review-queue' %}">返回审核队列</a> · 还剩 {{ remaining_count }} 篇待确认{% if preview_document %} · <a href="{% url 'view-document' preview_document.pk %}" target="_blank" rel="noopener">在线打开 PDF</a>{% endif %}</p>
+{% if proposal.validation_warnings %}<div class="alert error"><strong>需要注意：</strong>{{ proposal.validation_warnings|join:"；" }}</div>{% endif %}
+<div class="review-grid">
+  <section class="review-card">
+    <h2>当前 metadata</h2>
+    <dl class="metadata-compare">
+      <dt>标题</dt><dd>{{ proposal.canonical_document.title|default:"—" }}</dd>
+      <dt>作者</dt><dd>{% for author in proposal.canonical_document.authors %}{{ author.name }}{% if not forloop.last %}；{% endif %}{% empty %}—{% endfor %}</dd>
+      <dt>期刊 / 年份</dt><dd>{{ proposal.canonical_document.journal|default:"—" }} / {{ proposal.canonical_document.publication_year|default:"—" }}</dd>
+      <dt>DOI</dt><dd>{{ proposal.canonical_document.doi|default:"—" }}</dd>
+      <dt>摘要</dt><dd>{{ proposal.canonical_document.abstract|default:"—" }}</dd>
+    </dl>
+  </section>
+  <section class="review-card">
+    <h2>证据</h2>
+    {% for field, entries in proposal.proposal.field_evidence.items %}
+      <div class="evidence-block"><strong>{{ field }}</strong>{% for entry in entries %}<div class="file-meta">{{ entry.source }}{% if entry.page %} · 第 {{ entry.page }} 页{% endif %}</div><p>{{ entry.quote|default:"无引文" }}</p>{% endfor %}</div>
+    {% empty %}<p class="subtle">没有通过本地校验的页码引文，请重点人工检查。</p>{% endfor %}
+  </section>
+</div>
+{% if proposal.status == 'succeeded' %}
+<section class="review-card review-form">
+  <h2>确认后的 metadata</h2>
+  <form method="post" action="{% url 'metadata-review-accept' proposal.pk %}">
+    {% csrf_token %}
+    {{ form.non_field_errors }}
+    {% for field in form %}<div class="field"><label for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{{ field.errors }}</div>{% endfor %}
+    <div class="review-submit-row">
+      <button class="primary" type="submit">确认并返回队列</button>
+      {% if remaining_count > 1 %}<button type="submit" name="continue" value="next">确认并审核下一篇</button>{% endif %}
+    </div>
+  </form>
+  <form method="post" action="{% url 'metadata-review-reject' proposal.pk %}" class="secondary-action">{% csrf_token %}<button type="submit">退回 AI 建议</button></form>
+</section>
+{% else %}<div class="alert error">该建议当前状态为 {{ proposal.get_status_display }}，不能直接确认。</div>{% endif %}
+{% endblock %}
