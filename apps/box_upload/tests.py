@@ -1133,6 +1133,19 @@ class MetadataResolutionTests(TestCase):
         self.assertEqual(evidence["doi_source"], {"source": "pdf_page", "page": 5})
 
     @patch("apps.box_upload.metadata.PdfReader")
+    def test_pdf_evidence_removes_postgresql_unsupported_nulls(self, pdf_reader):
+        class Page:
+            def extract_text(self):
+                return "formula z\x00z0"
+
+        pdf_reader.return_value = type("Reader", (), {"metadata": {}, "pages": [Page()]})()
+
+        evidence = extract_pdf_evidence(SimpleUploadedFile("paper.pdf", b"%PDF-1.7\n"))
+
+        self.assertEqual(evidence["pages"][0]["text"], "formula z z0")
+        self.assertNotIn("\x00", str(evidence))
+
+    @patch("apps.box_upload.metadata.PdfReader")
     def test_title_page_doi_wins_over_later_page_and_raw_bytes(self, pdf_reader):
         class Page:
             def __init__(self, text):

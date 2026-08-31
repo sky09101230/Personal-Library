@@ -250,6 +250,8 @@ def confirm_batch(request, batch_id):
                 status=UploadedDocument.Status.UPLOADED,
                 file_role=UploadedDocument.FileRole.PRIMARY,
             ).exists():
+                if canonical.metadata_status != CanonicalDocument.MetadataStatus.VERIFIED:
+                    _apply_confirmed_metadata(canonical, item)
                 association = associate_existing_pdf(canonical, request.user)
                 state = "skipped" if association == "skipped" else "merged"
                 result = {"state": state, "filename": item.original_name}

@@ -190,7 +190,34 @@ class UploadReviewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["results"][0]["state"], "merged")
         self.assertEqual(UploadedDocument.objects.count(), 1)
+        canonical.refresh_from_db()
+        self.assertEqual(canonical.title, "Paper")
+        self.assertEqual(canonical.metadata_status, CanonicalDocument.MetadataStatus.VERIFIED)
         self.assertTrue(canonical.uploaders.filter(pk=self.user.pk).exists())
+        delete.assert_called_once()
+
+    @patch("apps.box_upload.upload_review.delete_literature")
+    def test_existing_verified_metadata_is_not_overwritten(self, delete):
+        canonical = CanonicalDocument.objects.create(
+            title="Verified title",
+            doi="10.1000/paper",
+            metadata_status=CanonicalDocument.MetadataStatus.VERIFIED,
+        )
+        UploadedDocument.objects.create(
+            canonical_document=canonical,
+            uploader=self.user,
+            original_name="existing.pdf",
+            remote_path="/existing.pdf",
+            sha256="c" * 64,
+            size=1,
+        )
+        item = self.create_item(metadata={"title": "Replacement", "doi": "10.1000/paper"})
+
+        response = self.client.post(f"/upload/batches/{item.batch_id}/confirm/")
+
+        canonical.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(canonical.title, "Verified title")
         delete.assert_called_once()
 
     @patch("apps.box_upload.upload_review.delete_literature")

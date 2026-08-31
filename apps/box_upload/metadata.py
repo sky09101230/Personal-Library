@@ -356,7 +356,11 @@ def resolve_pdf_metadata(canonical, uploaded_file, crossref_fetcher=None, bibtex
             "fields": _populated_fields(crossref_metadata),
         }
     if bibtex_metadata:
-        enriched_bibtex = _enriched_bibtex(bibtex_entry, resolved)
+        try:
+            enriched_bibtex = _enriched_bibtex(bibtex_entry, resolved)
+        except Exception:
+            enriched_bibtex = raw_bibtex
+            provider_errors["bibtex_enrichment"] = "BibTeX evidence enrichment failed."
         provider_evidence["bibtex"] = {
             "doi": bibtex_metadata["doi"],
             "fields": _populated_fields(bibtex_metadata),
@@ -647,7 +651,7 @@ def _first(value):
 
 
 def _clean_text(value):
-    return " ".join(str(value or "").split())
+    return " ".join(str(value or "").replace("\x00", " ").split())
 
 
 def _metadata_user_agent():
