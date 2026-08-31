@@ -1,0 +1,23 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<div class="module">
+  <h1>确认删除文献文件</h1>
+  <p>以下 {{ documents|length }} 个文件将从各自的对象存储和本地数据库中删除。此操作不可撤销。</p>
+  <form method="post" action="{{ action_url }}" onsubmit="this.querySelector('button[type=submit]').disabled=true; document.getElementById('delete-progress').hidden=false;">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="delete_from_box">
+    <input type="hidden" name="confirm" value="yes">
+    {% for pk in selected_ids %}<input type="hidden" name="_selected_action" value="{{ pk }}">{% endfor %}
+    <ul>{% for document in documents %}<li>{{ document.original_name }} <code>{{ document.remote_path }}</code></li>{% endfor %}</ul>
+    <button type="submit" class="default">确认删除</button>
+    <a href="{{ action_url }}" class="button cancel-link">取消</a>
+  </form>
+  <p id="delete-progress" hidden aria-live="polite">
+    正在逐个删除对象存储文件，请稍候...
+    <progress class="delete-progress-bar"></progress>
+  </p>
+</div>
+<style>
+  .delete-progress-bar { width: 260px; vertical-align: middle; }
+</style>
+{% endblock %}

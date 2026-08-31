@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+{% block title %}从 Zotero 导入 | PLAB{% endblock %}
+{% block content %}
+<div class="page-head">
+  <p class="eyebrow">Zotero Web API v3 + Desktop Local API</p>
+  <h1>从 Zotero 导入文献</h1>
+  {% if upgrade_mode %}<p class="subtle">该功能正在限制范围内测试。</p>{% else %}<p class="subtle">先连接账号，再选择 Collection 和条目。PDF 优先读取本机 Zotero Desktop，无法读取时回退 Zotero Web。</p>{% endif %}
+</div>
+{% if upgrade_mode %}
+<div class="panel"><h2>正在测试升级当中</h2><p class="subtle">Zotero 导入目前仅向管理员开放，完成测试后再向普通成员开放。</p></div>
+{% else %}
+<div class="panel">
+  <h2>1. 连接 Zotero</h2>
+  <form id="zotero-connect-form" method="post">
+    {% csrf_token %}
+    {% for field in form %}<div class="field">{{ field.label_tag }}{{ field }}{% if field.help_text %}<p class="subtle">{{ field.help_text }}</p>{% endif %}</div>{% endfor %}
+    <button id="zotero-connect-submit" class="primary" type="submit">{% if connected %}重新连接并读取 Collections{% else %}连接并保存配置{% endif %}</button>
+    <p id="zotero-connect-status" class="subtle">{% if connected %}已有加密保存的连接；API Key 留空即可使用。{% else %}首次连接需要填写 Library ID 和 API Key。{% endif %}</p>
+  </form>
+</div>
+
+<div id="zotero-browser" class="panel" hidden>
+  <h2>2. 选择 Collection 和条目</h2>
+  <div class="field">
+    <label for="zotero-collection">Collection（名称 + Key）</label>
+    <select id="zotero-collection"><option value="">请选择</option></select>
+  </div>
+  <label id="zotero-select-all-wrap" hidden><input id="zotero-select-all" type="checkbox"> 全选当前 Collection</label>
+  <form id="zotero-import-form" method="post">
+    {% csrf_token %}
+    <div id="zotero-items"></div>
+    <button id="zotero-import-submit" class="primary" type="submit" disabled>导入选中条目</button>
+  </form>
+</div>
+
+<div id="zotero-result" class="panel" hidden>
+  <h2>3. 导入进度</h2>
+  <div id="zotero-progress" class="progress-wrap active" aria-live="polite">
+    <div class="progress-track"><div id="zotero-progress-bar" class="progress-bar"></div></div>
+    <div class="progress-label"><span id="zotero-progress-status">准备导入</span><span id="zotero-progress-percent">0%</span></div>
+  </div>
+  <ul id="zotero-progress-details" class="compact-list" hidden></ul>
+  <a id="zotero-library-link" href="{% url 'library' %}" hidden>打开文献库</a>
+</div>
+
+<div class="panel side-note"><strong>PDF 来源顺序</strong><p>当前浏览器手动选择的 PDF → 服务器上的 Zotero Desktop → Zotero Web。自动附件仍只导入 `imported_file + application/pdf`；网页快照、URL 附件、linked file 和非 PDF 都会跳过。</p></div>
+
+<script>
+(() => {
+  const connectForm = document.getElementById('zotero-connect-form');
+  const connectButton = document.getElementById('zotero-connect-submit');
+  const connectStatus = document.getElementById('zotero-connect-status');
+  const browser = document.getElementById('zotero-browser');
+  const collection = document.getElementById('zotero-collection');
+  const selectAllWrap = document.getElementById('zotero-select-all-wrap');
+  const selectAll = document.getElementById('zotero-select-all');
+  const importForm = document.getElementById('zotero-import-form');
+  const items = document.getElementById('zotero-items');
+  const importButton = document.getElementById('zotero-import-submit');
+  const resultPanel = document.getElementById('zotero-result');
+  const progress = document.getElementById('zotero-progress');
+  const bar = document.getElementById('zotero-progress-bar');
+  const status = document.getElementById('zotero-progress-status');
+  const percent = document.getElementById('zotero-progress-percent');
+  const details = document.getElementById('zotero-progress-details');
+  const libraryLink = document.getElementById('zotero-library-link');
+  const csrf = connectForm.querySelector('[name=csrfmiddlewaretoken]').value;
+
+  async function post(data, accept = 'application/json') {
+    const response = await fetch(window.location.pathname, {method: 'POST', headers: {Accept: accept}, body: data});
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.message || 'Zotero 请求失败');
+    }
+    return response;
+  }
+
+  function updateImportButton() {
+    importButton.disabled = !items.querySelector('input[name=item_keys]:checked');
+  }
+
+  connectForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    connectButton.disabled = true;
+    connectStatus.textContent = '正在验证账号并读取 Collections…';
+    const data = new FormData(connectForm);
+    data.append('action', 'connect');
+    try {
+      const body = await (await post(data)).json();
+      collection.replaceChildren(new Option('请选择', ''));
+      body.collections.forEach(row => collection.add(new Option(`${row.name} · ${row.key}`, row.key)));
+      browser.hidden = false;
+      connectStatus.textContent = `连接成功，共 ${body.collections.length} 个 Collections。配置已加密保存。`;
+      connectButton.textContent = '重新连接并读取 Collections';
+    } catch (error) {
+      connectStatus.textContent = error.message;
+    } finally {
+      connectButton.disabled = false;
+    }
+  });
+
+  collection.addEventListener('change', async () => {
+    items.replaceChildren();
+    importButton.disabled = true;
+    selectAllWrap.hidden = true;
+    if (!collection.value) return;
+    const loading = document.createElement('p');
+    loading.className = 'subtle';
+    loading.textContent = '正在读取条目…';
+    items.appendChild(loading);
+    const data = new FormData();
+    data.append('csrfmiddlewaretoken', csrf);
+    data.append('action', 'items');
+    data.append('collection_key', collection.value);
+    try {
+      const body = await (await post(data)).json();
+      items.replaceChildren();
+      body.items.forEach(row => {
+        const record = document.createElement('div');
+        record.className = 'field';
+        const label = document.createElement('label');
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.name = 'item_keys';
+        input.value = row.key;
+        input.addEventListener('change', updateImportButton);
+        label.append(input, ` ${row.title} · ${row.authors.join(', ') || '作者未知'}${row.year ? ` · ${row.year}` : ''} · ${row.key}`);
+        const pdfLabel = document.createElement('label');
+        pdfLabel.className = 'subtle';
+        pdfLabel.textContent = '本地 PDF（可选，直接从当前电脑上传）';
+        const pdf = document.createElement('input');
+        pdf.type = 'file';
+        pdf.name = `pdf_${row.key}`;
+        pdf.accept = '.pdf,application/pdf';
+        pdf.addEventListener('change', () => {
+          if (pdf.files.length) input.checked = true;
+          updateImportButton();
+        });
+        pdfLabel.appendChild(pdf);
+        record.append(label, pdfLabel);
+        items.appendChild(record);
+      });
+      selectAll.checked = false;
+      selectAllWrap.hidden = body.items.length === 0;
+      if (!body.items.length) items.textContent = '该 Collection 没有可导入的顶层文献。';
+    } catch (error) {
+      items.textContent = error.message;
+    }
+  });
+
+  selectAll.addEventListener('change', () => {
+    items.querySelectorAll('input[name=item_keys]').forEach(input => { input.checked = selectAll.checked; });
+    updateImportButton();
+  });
+
+  importForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    importButton.disabled = true;
+    resultPanel.hidden = false;
+    progress.classList.remove('error');
+    details.replaceChildren();
+    details.hidden = true;
+    libraryLink.hidden = true;
+    bar.style.width = '2%';
+    status.textContent = '正在上传本地 PDF 并提交选中条目';
+    percent.textContent = '2%';
+    const data = new FormData(importForm);
+    data.append('action', 'import');
+
+    try {
+      const response = await post(data, 'application/x-ndjson');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let completed = false;
+      let failure = '';
+      const applyLine = line => {
+        if (!line.trim()) return;
+        const update = JSON.parse(line);
+        if (!update.ok) { failure = update.message || 'Zotero 导入失败'; return; }
+        const value = Math.max(0, Math.min(100, update.progress || 0));
+        bar.style.width = `${value}%`;
+        percent.textContent = `${value}%`;
+        status.textContent = update.message;
+        completed = Boolean(update.done);
+        if (update.attachment_failure) {
+          const item = document.createElement('li');
+          item.textContent = update.attachment_failure;
+          details.appendChild(item);
+          details.hidden = false;
+        }
+        if (update.done && update.result?.pdf_failed) progress.classList.add('error');
+      };
+      while (true) {
+        const {value, done} = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), {stream: !done});
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        lines.forEach(applyLine);
+        if (done) break;
+      }
+      applyLine(buffer);
+      if (failure) throw new Error(failure);
+      if (!completed) throw new Error('导入连接提前结束');
+      libraryLink.hidden = false;
+    } catch (error) {
+      progress.classList.add('error');
+      status.textContent = error.message;
+      percent.textContent = '';
+    } finally {
+      updateImportButton();
+    }
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

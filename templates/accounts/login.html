@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Log in | PLAB{% endblock %}
+{% block content %}
+<div class="auth-card panel">
+  <p class="eyebrow">PLAB workspace</p>
+  <h1>Welcome back</h1>
+  <p class="subtle">Login to upload and review your literature records.</p>
+  <form method="post">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ next }}">
+    {{ form.as_p }}
+    <button class="primary" type="submit">Log in</button>
+  </form>
+  <p class="subtle">No account yet? <a href="{% url 'register' %}">Create one</a></p>
+</div>
+{% endblock %}

@@ -1,38 +1,32 @@
-# PLAB Scientific Agent
+## PLAB Scientific Agent
 
-PLAB Scientific Agent 是面向课题组内部的科研知识沉淀、检索与智能问答平台。
+Local development:
 
-项目目前处于**编码前准备阶段**，尚无可运行的业务代码。当前工作重点是确认 GitHub、数据库、AI 检索、Web 部署和测试样本的前置条件。
-
-## 第一阶段目标
-
-打通一条可验收的文献闭环：
-
-```text
-上传 PDF → 后台解析与 AI 摘要 → 上传者审核 → 发布 → 检索 → 带页码引用的 Agent 回答
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+# Set AGENTSYS_DB_ENGINE=sqlite in .env for local development.
+python manage.py runserver
 ```
 
-## 文档入口
+Configure the local `.env` before uploading. See `docs/preparation/02-Django-NJU-Box-API.md`.
 
-- [系统宏观架构](docs/architecture/00-Architecture.md)
-- [技术决策记录](docs/decisions/0001-monorepo.md)
-- [GitHub 准备清单](docs/preparation/01-GitHub-Readiness.md)
-- [贡献指南](CONTRIBUTING.md)
-- [安全说明](SECURITY.md)
+当前部署使用 PostgreSQL 保存业务数据，文献和 Skill 新文件默认写入 NAS WebDAV。SQLite、Django `runserver` 和 NJU Box 仅用于本地开发或读取历史记录。网页与 `/mcp` 由同一个 ASGI 应用提供；生产环境应让 Uvicorn 只监听 `127.0.0.1:8000`，再由反向代理提供 TLS。
 
-## 数据边界
+### 管理员
 
-GitHub 只保存平台源代码、文档、测试和部署配置。以下内容不得提交：
+在项目目录执行以下命令创建管理员账号：
 
-- 真实论文、实验数据和用户上传文件
-- 数据库备份、检索索引和模型文件
-- API Key、密码、令牌和生产环境配置
+```powershell
+python manage.py createsuperuser
+```
 
-科研原始文件存放于 NJU Box，业务状态存放于 PostgreSQL，检索索引必须能够重建。
+按提示输入用户名、邮箱和密码。创建后访问 `http://127.0.0.1:8000/admin/`。
 
-## 仓库状态
+管理员可在 Skills 广场点击“搜索 GitHub Skill”，按关键词查找公开仓库中的 `SKILL.md`；必须配置仅能读取公开资源的 `GITHUB_API_TOKEN`，没有 GitHub 可识别许可证的结果不能导入。也可以继续在 `GitHub skill sources` 中管理固定来源并扫描整个仓库。两种方式都只更新私有候选，不会直接出现在正式 Skills 广场或 MCP 中；管理员在“候选审核”中确认内容、用途和说明后，才能批准并发布正式版本。
 
-- 默认分支：`main`
-- 仓库形态：私有 Monorepo
-- 业务代码：尚未开始
-- 下一阶段：完成编码前准备清单
+在 `Skill purposes` 中先添加大用途，再添加父级为该大用途的小用途；随后在 `Shared skills` 中为每个 Skill 选择小用途。要发布管理员精选，在 `Featured skills` 中选择一个 Skill、填写一句推荐语并设置排序值。
+
+在 `Uploaded documents` 页面选择记录，使用 `Delete selected files from object storage and database` 动作。系统根据每条记录的 `storage_backend` 删除 NAS WebDAV 或历史 NJU Box 文件，远端删除成功后才删除数据库记录；普通用户不会看到该管理入口。

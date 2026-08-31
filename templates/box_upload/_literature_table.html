@@ -1,0 +1,73 @@
+<div class="table-wrap"{% if table_id %} id="{{ table_id }}"{% endif %}>
+  <table class="literature-table">
+    <thead>
+      <tr>
+        <th class="title-column">标题</th>
+        <th class="authors-column">作者</th>
+        <th class="source-column">期刊与年份</th>
+        {% if show_abstract %}<th class="abstract-column">摘要</th>{% endif %}
+        <th class="status-column">状态</th>
+        <th class="document-actions-column">文献操作</th>
+        <th class="attachment-actions-column">PDF 附件</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for literature in literatures %}
+      <tr>
+        <td class="title-column">
+          <div class="file-name">{{ literature.title|default:"未识别标题" }}</div>
+          <div class="file-meta">DOI：{{ literature.doi|default:"—" }}</div>
+        </td>
+        <td class="authors-column">
+          <div class="authors-inline">{% for author in literature.authors %}{{ author.name|default:"姓名未知" }}{% if not forloop.last %}、{% endif %}
+          {% empty %}<span class="subtle">作者未知</span>{% endfor %}
+          </div>
+        </td>
+        <td class="source-column"><div class="source-facts"><strong>{{ literature.journal|default:"期刊未知" }}</strong><span class="file-meta">{{ literature.publication_year|default:"年份未知" }}</span></div></td>
+        {% if show_abstract %}<td class="abstract-column">
+          {% if literature.abstract %}<p class="abstract-preview" title="{{ literature.abstract }}">{{ literature.abstract }}</p>{% else %}<span class="subtle">暂无摘要</span>{% endif %}
+        </td>{% endif %}
+        <td class="status-column">
+          <div class="status-stack">
+          <span class="tag{% if literature.metadata_status == 'conflict' %} exact{% endif %}">{% if literature.metadata_status == 'verified' %}已验证{% elif literature.metadata_status == 'incomplete' %}信息不完整{% elif literature.metadata_status == 'needs_review' %}待复核{% elif literature.metadata_status == 'conflict' %}存在冲突{% else %}待解析{% endif %}</span>
+          <span class="tag">{% if literature.index_status == 'published' %}已发布{% else %}未发布{% endif %}</span>
+          <div class="file-meta">来源：{{ literature.metadata_source|default:"暂无" }}</div>
+          <div class="file-meta">置信度：{% if literature.metadata_confidence != None %}{{ literature.metadata_confidence }}{% else %}—{% endif %}</div>
+          </div>
+        </td>
+        <td class="document-actions-column">
+          <div class="row-actions">
+          {% with proposal=literature.latest_metadata_proposal %}
+            {% if proposal %}
+              {% if proposal.status == 'succeeded' and literature.can_review_ai_metadata %}<a class="row-action" href="{% url 'metadata-review-detail' proposal.pk %}">确认 AI metadata</a>
+              {% elif proposal.status == 'failed' and literature.can_review_ai_metadata %}<form method="post" action="{% url 'metadata-review-regenerate' proposal.pk %}">{% csrf_token %}<button class="link-button" type="submit">重新生成 AI 建议</button></form>
+              {% elif proposal.status == 'queued' or proposal.status == 'running' %}<span class="file-meta">AI 补全处理中</span>
+              {% endif %}
+            {% elif literature.can_review_ai_metadata and literature.metadata_status != 'verified' %}
+              <form method="post" action="{% url 'metadata-review-enqueue' literature.pk %}">{% csrf_token %}<button class="link-button" type="submit">生成 AI 建议</button></form>
+            {% endif %}
+          {% endwith %}
+          {% if request.user.is_staff %}
+          <a class="row-action" href="{% url 'admin:box_upload_canonicaldocument_change' literature.pk %}">编辑文献</a>
+          {% endif %}
+          </div>
+          <div class="file-meta">关联用户：{% for uploader in literature.uploaders.all %}{{ uploader.username }}{% if not forloop.last %}、{% endif %}{% empty %}—{% endfor %}</div>
+          {% if is_my_uploads %}<div class="file-meta">{% if literature.has_own_upload %}关系：你实际上传过 PDF{% else %}关系：通过 DOI 或 Zotero 关联，未重复保存 PDF{% endif %}</div>{% endif %}
+        </td>
+        <td class="attachment-actions-column">
+          {% for upload in literature.visible_uploads %}
+          <div class="attachment-item">
+            <div class="file-meta">{% if upload.file_role == 'supplementary' %}补充材料{% else %}正文 PDF{% endif %} · 提交者：{{ upload.uploader.username }}</div>
+            <div class="row-actions">
+              <a class="row-action primary-action" href="{% url 'view-document' upload.pk %}" target="_blank" rel="noopener">在线打开</a>
+              <a class="row-action" href="{% url 'download-document' upload.pk %}">下载</a>
+              {% if is_my_uploads and upload.uploader_id == request.user.id %}<form method="post" action="{% url 'delete-upload' upload.pk %}" onsubmit="return confirm('确认删除 {{ upload.original_name|escapejs }}？此操作不可恢复。')">{% csrf_token %}<button class="link-button danger-action" type="submit">删除</button></form>{% endif %}
+            </div>
+          </div>
+          {% empty %}<span class="subtle">无 PDF</span>{% endfor %}
+        </td>
+      </tr>
+      {% empty %}<tr><td colspan="{% if show_abstract %}7{% else %}6{% endif %}">尚无文献记录。</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div>
