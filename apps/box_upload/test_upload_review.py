@@ -108,11 +108,39 @@ class UploadReviewTests(TestCase):
     def test_other_user_cannot_access_pending_batch_or_item(self):
         item = self.create_item()
         other = User.objects.create_user(username="other", password="Strong-pass-1234")
-        self.client.force_login(other)
 
+        owner_response = self.client.get(f"/upload/?batch={item.batch_id}")
+        self.client.force_login(other)
+        other_response = self.client.get(f"/upload/?batch={item.batch_id}")
+
+        self.assertEqual(owner_response.status_code, 200)
+        self.assertContains(owner_response, item.original_name)
+        self.assertEqual(other_response.status_code, 404)
         self.assertEqual(self.client.post(f"/upload/review-items/{item.pk}/", data={"action": "save_title"}).status_code, 404)
         self.assertEqual(self.client.post(f"/upload/batches/{item.batch_id}/confirm/").status_code, 404)
         self.assertEqual(self.client.post(f"/upload/batches/{item.batch_id}/cancel/").status_code, 404)
+
+    @patch("apps.box_upload.upload_review.fetch_doi_bibtex", return_value=(
+        "@article{wrong, title={A Completely Different Work}, author={Lovelace, Ada}, "
+        "journal={Journal of Tests}, year={2026}, doi={10.1000/wrong}}"
+    ))
+    def test_doi_title_mismatch_is_a_non_blocking_warning(self, fetch):
+        item = self.create_item(metadata={"title": "PDF Extracted Paper", "journal": "", "doi": ""})
+
+        response = self.client.post(
+            f"/upload/review-items/{item.pk}/",
+            data={"action": "reparse_doi", "doi": "10.1000/wrong"},
+        )
+        warning = response.json()["item"]["warnings"][0]
+        confirm_response = self.client.post(f"/upload/batches/{item.batch_id}/confirm/")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(warning["code"], "doi_title_mismatch")
+        self.assertEqual(warning["pdf_title"], "Paper")
+        self.assertEqual(warning["doi_title"], "A Completely Different Work")
+        self.assertEqual(confirm_response.status_code, 200)
+        self.assertEqual(CanonicalDocument.objects.get().index_status, CanonicalDocument.IndexStatus.PUBLISHED)
+        fetch.assert_called_once_with("10.1000/wrong")
 
     def test_missing_title_blocks_entire_confirmation(self):
         batch = self.create_batch()

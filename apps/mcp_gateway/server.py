@@ -9,6 +9,7 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db.models import Q
+from django.urls import reverse
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
@@ -16,17 +17,12 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from apps.box_upload.models import CanonicalDocument, UploadedDocument
 from apps.box_upload.downloads import build_literature_download_url
-from apps.box_upload.ingestion import associate_existing_pdf, prepare_pdf, save_pdf_upload
-from apps.box_upload.metadata import (
-    extract_pdf_evidence,
-    fetch_doi_bibtex,
-    normalize_doi,
-    resolve_pdf_metadata_safely,
-    select_pdf_doi,
+from apps.box_upload.upload_review import (
+    create_review_batch,
+    serialize_review_item,
+    stage_pdf_for_review,
 )
-from apps.box_upload.metadata_jobs import enqueue_metadata_proposal_safely
 from apps.box_upload.services import LiteratureStorageError
-from apps.box_upload.storage import store_literature
 from apps.skills.downloads import build_skill_download_url
 from apps.skills.models import SharedSkill, SharedSkillRelease
 
@@ -51,6 +47,34 @@ def _document_text(document):
         f"发表年份: {document['publication_year'] or '未提供'}",
         f"元数据状态: {document['metadata_status']}",
         f"文件大小: {str(document['size']) + ' 字节' if document['size'] is not None else '无附件'}",
+    ))
+
+
+def _review_upload_text(review):
+    item = review["item"]
+    metadata = item["metadata"]
+    authors = []
+    for author in metadata.get("authors") or []:
+        name = author.get("name", "") if isinstance(author, dict) else str(author)
+        if name:
+            authors.append(name)
+    warnings = []
+    for warning in item["warnings"]:
+        message = warning["message"]
+        if warning["code"] == "doi_title_mismatch":
+            message += f"（PDF：{warning['pdf_title']}；DOI/BibTeX：{warning['doi_title']}）"
+        warnings.append(f"- {message}")
+    return "\n".join((
+        "状态: pending_review",
+        f"Batch ID: {review['batch_id']}",
+        f"文件名: {item['filename']}",
+        f"标题: {metadata.get('title') or '未提供'}",
+        f"作者: {', '.join(authors) or '未提供'}",
+        f"期刊: {metadata.get('journal') or '未提供'}",
+        f"DOI: {metadata.get('doi') or '未提供'}",
+        f"发表年份: {metadata.get('publication_year') or '未提供'}",
+        "Warnings:\n" + ("\n".join(warnings) if warnings else "无"),
+        f"网页审核地址: {review['review_url']}",
     ))
 
 
@@ -175,63 +199,20 @@ def _get_skill_release(skill_id):
 
 
 @sync_to_async(thread_sensitive=True)
-def _save_upload(filename, content, content_type, uploader_id):
+def _stage_upload(filename, content, content_type, uploader_id):
     uploaded_file = SimpleUploadedFile(filename, content, content_type=content_type)
     uploader = User.objects.get(pk=uploader_id)
-    prepared = prepare_pdf(uploaded_file)
-    evidence = extract_pdf_evidence(prepared.uploaded_file)
-    doi = normalize_doi(evidence["doi"])
-    prefetched_bibtex = None
-    if len(evidence.get("doi_candidates") or []) > 1:
-        doi, prefetched_bibtex = select_pdf_doi(evidence, bibtex_fetcher=fetch_doi_bibtex)
-
-    doi_existing = CanonicalDocument.objects.filter(doi__iexact=doi).first() if doi else None
-    canonical = doi_existing or CanonicalDocument.objects.filter(sha256=prepared.sha256).first()
-    if canonical is None:
-        if doi:
-            canonical, created = CanonicalDocument.objects.get_or_create(
-                doi=doi,
-                defaults={"sha256": prepared.sha256},
-            )
-        else:
-            canonical, created = CanonicalDocument.objects.get_or_create(sha256=prepared.sha256)
-    else:
-        created = False
-
-    if doi and not created and canonical.doi.casefold() == doi.casefold():
-        association = associate_existing_pdf(canonical, uploader)
-        if association:
-            canonical = CanonicalDocument.objects.prefetch_related("uploads").get(pk=canonical.pk)
-            return _document_data(canonical)
-
-    document = save_pdf_upload(
-        canonical,
-        uploader,
-        prepared,
-        store_file=store_literature,
-        reuse_existing_pdf=bool(doi),
-    )
-    if document is None:
-        canonical = CanonicalDocument.objects.prefetch_related("uploads").get(pk=canonical.pk)
-        return _document_data(canonical)
-    if created:
-        resolve_pdf_metadata_safely(
-            canonical,
-            prepared.uploaded_file,
-            bibtex_fetcher=(
-                (lambda _doi, value=prefetched_bibtex: value)
-                if prefetched_bibtex is not None
-                else None
-            ),
-        )
-    enqueue_metadata_proposal_safely(
-        canonical,
-        requested_by=document.uploader,
-        source_upload=document,
-        uploaded_file=prepared.uploaded_file,
-    )
-    canonical = CanonicalDocument.objects.prefetch_related("uploads").get(pk=canonical.pk)
-    return _document_data(canonical)
+    batch = create_review_batch(uploader)
+    try:
+        item = stage_pdf_for_review(batch, uploaded_file)
+    except Exception:
+        batch.delete()
+        raise
+    return {
+        "batch_id": batch.pk,
+        "item": serialize_review_item(item),
+        "review_url": f"{settings.MCP_PUBLIC_BASE_URL}{reverse('box-upload')}?batch={batch.pk}",
+    }
 
 
 public_base_url = settings.MCP_PUBLIC_BASE_URL
@@ -284,7 +265,7 @@ async def get_literature_download_link(document_id: int):
 
 @mcp.tool()
 async def upload_literature(filename: str, content_base64: str, content_type: str = "application/pdf"):
-    """上传一篇 PDF 文献。content_base64 必须是文件的标准 Base64 内容，最大 20 MiB。"""
+    """上传 PDF 到待审核批次。content_base64 必须是标准 Base64 内容，最大 20 MiB。"""
     access_token = _require_scope("literature:write")
     filename = Path(filename).name
     if not filename or not filename.lower().endswith(".pdf"):
@@ -301,10 +282,10 @@ async def upload_literature(filename: str, content_base64: str, content_type: st
         raise ValueError("上传内容必须是未超过大小限制的有效 PDF。")
     uploader_id = int(access_token.client_id.removeprefix("user:"))
     try:
-        document = await _save_upload(filename, content, content_type, uploader_id)
+        review = await _stage_upload(filename, content, content_type, uploader_id)
     except LiteratureStorageError as exc:
         raise RuntimeError(f"上传到文献存储失败：{exc}") from exc
-    return f"上传成功。\n{_document_text(document)}"
+    return _review_upload_text(review)
 
 
 @mcp.tool()

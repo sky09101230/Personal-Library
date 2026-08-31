@@ -20,11 +20,11 @@
   .metadata-table th { color: var(--muted); font-size: 11px; font-weight: 700; }
   .metadata-table tr:last-child td { border-bottom: 0; }
   .metadata-table tr.missing-title, .metadata-table tr.upload-failed { background: #fff0f0; }
-  .metadata-table tr.missing-journal { background: #fff8df; }
+  .metadata-table tr.missing-journal, .metadata-table tr.title-mismatch { background: #fff8df; }
   .metadata-filename { display: -webkit-box; overflow: hidden; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
   .metadata-issue { margin-top: 3px; font-size: 11px; font-weight: 700; }
   .missing-title .metadata-issue, .upload-failed .metadata-issue { color: var(--danger); }
-  .missing-journal .metadata-issue { color: #8a5b00; }
+  .missing-journal .metadata-issue, .title-mismatch .metadata-issue { color: #8a5b00; }
   .metadata-editor { display: flex; align-items: stretch; gap: 4px; }
   .metadata-editor input { flex: 1 1 0; min-width: 0; width: auto; box-sizing: border-box; border: 1px solid #cfd4df; border-radius: 4px; padding: 6px; font: inherit; font-size: 12px; }
   .metadata-editor button { flex: 0 0 auto; border: 1px solid #c8b8d4; border-radius: 4px; padding: 6px 8px; background: #fff; color: var(--accent); cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; }
@@ -88,6 +88,7 @@
   </tr>
 </template>
 
+{{ review_items|json_script:"initial-review-items" }}
 <script>
 (() => {
   const MAX_CHANNELS = 4;
@@ -107,8 +108,8 @@
   const batchStatus = document.getElementById('batch-status');
   const confirmButton = document.getElementById('confirm-batch');
   const cancelButton = document.getElementById('cancel-batch');
-  let currentBatch = null;
-  let batchItems = [];
+  let currentBatch = {{ review_batch_id|default_if_none:"null" }};
+  let batchItems = JSON.parse(document.getElementById('initial-review-items').textContent);
   let uploadFailures = [];
   let fileProgress = [];
 
@@ -202,15 +203,19 @@
     request.send(data);
   });
 
-  const setRowIssue = (row, issue) => {
-    row.classList.remove('missing-title', 'missing-journal');
+  const setRowIssue = (row, item) => {
+    row.classList.remove('missing-title', 'missing-journal', 'title-mismatch');
     const label = row.querySelector('.metadata-issue');
-    if (issue === 'missing_title') {
+    const warnings = item.warnings || [];
+    if (item.issue === 'missing_title') {
       row.classList.add('missing-title');
       label.textContent = '缺少标题';
-    } else if (issue === 'missing_journal') {
-      row.classList.add('missing-journal');
-      label.textContent = '缺少期刊';
+    } else if (warnings.length) {
+      row.classList.add(item.issue === 'missing_journal' ? 'missing-journal' : 'title-mismatch');
+      label.textContent = warnings.map((warning) => {
+        if (warning.code !== 'doi_title_mismatch') return warning.message;
+        return `${warning.message}：PDF「${warning.pdf_title}」；DOI/BibTeX「${warning.doi_title}」`;
+      }).join('；');
     } else {
       label.textContent = '可确认';
     }
@@ -219,10 +224,12 @@
   const updateReviewState = () => {
     const missingTitles = batchItems.filter((item) => item.issue === 'missing_title').length;
     const missingJournals = batchItems.filter((item) => item.issue === 'missing_journal').length;
+    const titleMismatches = batchItems.filter((item) => (item.warnings || []).some((warning) => warning.code === 'doi_title_mismatch')).length;
     const dirtyTitles = batchItems.filter((item) => item.titleDirty).length;
     const parts = [`已解析 ${batchItems.length} 个文件`];
     if (missingTitles) parts.push(`${missingTitles} 个缺标题`);
     if (missingJournals) parts.push(`${missingJournals} 个缺期刊`);
+    if (titleMismatches) parts.push(`${titleMismatches} 个标题 warning`);
     if (dirtyTitles) parts.push(`${dirtyTitles} 个标题未保存`);
     if (uploadFailures.length) parts.push(`${uploadFailures.length} 个上传失败`);
     reviewSummary.textContent = parts.join(' · ');
@@ -250,7 +257,7 @@
       const filenameNode = row.querySelector('.metadata-filename');
       filenameNode.textContent = item.filename;
       filenameNode.title = item.filename;
-      setRowIssue(row, item.issue);
+      setRowIssue(row, item);
       const titleInput = row.querySelector('.title-input');
       const doiInput = row.querySelector('.doi-input');
       const saveTitle = row.querySelector('.save-title');
@@ -378,6 +385,15 @@
       updateReviewState();
     }
   });
+
+  if (currentBatch) {
+    review.classList.add('active');
+    submit.disabled = true;
+    fileInput.disabled = true;
+    cancelButton.disabled = false;
+    batchStatus.textContent = '请核对 MCP 上传的解析结果';
+    renderReviewRows();
+  }
 })();
 </script>
 {% endblock %}

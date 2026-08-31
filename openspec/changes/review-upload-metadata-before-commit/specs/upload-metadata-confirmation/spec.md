@@ -1,11 +1,11 @@
 ## Purpose
 
-让网页上传者在文件传输后、正式入库前检查并修正文献 metadata，防止错误或不完整记录直接进入共享文献库。
+让 Browser 或 MCP 上传者在文件传输后、正式入库前通过现有网页检查并修正文献 metadata，防止错误或不完整记录直接进入共享文献库。
 
 ## ADDED Requirements
 
 ### Requirement: Uploaded files remain staged until uploader confirmation
-系统 SHALL 将网页上传的 PDF 与解析结果归入当前用户的待确认批次，且在用户确认前不得创建正式文献或正式上传记录。
+系统 SHALL 将 Browser 或 MCP 上传的 PDF 与解析结果归入上传者自己的待确认批次，且在用户确认前不得创建正式文献或正式上传记录。
 
 #### Scenario: A PDF finishes transfer and parsing
 - **WHEN** 已登录用户上传有效 PDF，且 NAS 写入与 metadata 解析完成
@@ -16,6 +16,12 @@
 - **WHEN** 非批次上传者尝试查看、修改、确认或取消该批次
 - **THEN** 系统拒绝该操作且不暴露批次内容
 
+#### Scenario: MCP upload finishes staging
+- **WHEN** 具有文献写入权限的 MCP 令牌上传并解析有效 PDF
+- **THEN** 系统将令牌 `user:<id>` 对应用户设为批次上传者
+- **AND** 立即返回 `pending_review` 语义、batch ID、解析摘要、warnings 和网页审核地址
+- **AND** 不等待网页确认
+
 ### Requirement: Browser upload uses four bounded channels
 系统 SHALL 在批量上传时最多同时传输四个 PDF，并分别展示四个通道的当前文件和传输进度。
 
@@ -25,7 +31,7 @@
 - **AND** 每个文件完成后由空闲通道继续处理队列中的下一文件
 
 ### Requirement: Batch results expose metadata issues and corrections
-系统 SHALL 在上传表单下方使用紧凑表格展示本批每个文件的解析结果，将缺少标题的项显示为错误状态，将缺少期刊的项显示为警告状态，并允许上传者编辑标题或提交 DOI 重新解析。
+系统 SHALL 在上传表单下方使用紧凑表格展示本批每个文件的解析结果，将缺少标题的项显示为错误状态，将缺少期刊或 DOI/BibTeX 标题与 PDF 提取标题明显不一致的项显示为警告状态，并允许上传者编辑标题或提交 DOI 重新解析。
 
 #### Scenario: All selected files finish parsing
 - **WHEN** 本批所有上传 worker 均已完成
@@ -40,6 +46,11 @@
 #### Scenario: Parsed journal is missing
 - **WHEN** 某个待确认项有标题但没有期刊名称
 - **THEN** 该项以黄色警告状态显示
+
+#### Scenario: DOI title conflicts with PDF title
+- **WHEN** DOI/BibTeX 标题与 PDF 提取标题均存在且明显不一致
+- **THEN** 该项显示黄色 warning 并返回两端标题摘要
+- **AND** warning 不阻断上传者确认
 
 #### Scenario: Uploader reparses a DOI
 - **WHEN** 上传者为待确认项提交格式有效的 DOI 并选择重新解析
@@ -68,6 +79,11 @@
 - **WHEN** 确认期间任一正式数据库写入失败
 - **THEN** 系统回滚本批全部正式数据库变更
 - **AND** 保留待确认批次与 NAS 文件以允许重试
+
+#### Scenario: Existing PDF is confirmed by a new uploader
+- **WHEN** 上传者确认的 PDF 正文与已有正式文献完全相同
+- **THEN** 系统复用已有正文和正式文献记录
+- **AND** 将当前批次上传者关联到该正式文献
 
 ### Requirement: Uploader can cancel a pending batch
 系统 SHALL 允许上传者取消未确认批次，并在远端删除成功后移除对应暂存记录。
