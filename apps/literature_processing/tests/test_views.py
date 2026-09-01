@@ -32,6 +32,7 @@ class LiteratureDetailViewTests(TestCase):
             size=128,
         )
         self.url = reverse("literature-detail", args=[self.literature.pk])
+        self.status_url = reverse("literature-processing-status", args=[self.literature.pk])
 
     def create_job(self, *, status, stage, suffix):
         return DocumentProcessingJob.objects.create(
@@ -119,6 +120,10 @@ class LiteratureDetailViewTests(TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, f"{reverse('login')}?next={self.url}")
 
+        status_response = self.client.get(self.status_url)
+        self.assertEqual(status_response.status_code, 302)
+        self.assertEqual(status_response.url, f"{reverse('login')}?next={self.status_url}")
+
     def test_unprocessed_detail_keeps_original_metadata_and_pdf_actions(self):
         self.client.force_login(self.user)
 
@@ -146,9 +151,74 @@ class LiteratureDetailViewTests(TestCase):
         failed_response = self.client.get(self.url)
 
         self.assertContains(queued_response, "等待处理")
+        self.assertContains(queued_response, self.status_url)
+        self.assertContains(queued_response, "setInterval(refresh, 2000)")
         self.assertContains(failed_response, "处理失败")
         self.assertContains(failed_response, "Literature processing failed during overview.")
         self.assertTrue(UploadedDocument.objects.filter(pk=self.upload.pk).exists())
+
+    def test_processing_status_endpoint_reports_live_page_progress(self):
+        job = self.create_job(
+            status=DocumentProcessingJob.Status.RUNNING,
+            stage=DocumentProcessingJob.Stage.PARSE,
+            suffix="progress",
+        )
+        job.parser_name = "mineru"
+        job.queue_lane = DocumentProcessingJob.QueueLane.REALTIME
+        job.provider_state = "running"
+        job.provider_batch_id = "batch-status"
+        job.progress_current = 12
+        job.progress_total = 37
+        job.progress_unit = "pages"
+        job.save(
+            update_fields=(
+                "parser_name",
+                "queue_lane",
+                "provider_state",
+                "provider_batch_id",
+                "progress_current",
+                "progress_total",
+                "progress_unit",
+                "updated_at",
+            )
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.status_url)
+        payload = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["job_id"], job.pk)
+        self.assertEqual(payload["stage"], "MinerU 解析中")
+        self.assertEqual(payload["provider_state"], "running")
+        self.assertEqual(payload["parser_name"], "mineru")
+        self.assertEqual(payload["queue_lane"], "realtime")
+        self.assertEqual(payload["progress_current"], 12)
+        self.assertEqual(payload["progress_total"], 37)
+        self.assertEqual(payload["progress_percent"], 32)
+        self.assertFalse(payload["terminal"])
+
+    def test_processing_status_endpoint_reports_no_job_and_terminal_failure(self):
+        self.client.force_login(self.user)
+
+        empty = self.client.get(self.status_url).json()
+        failed_job = self.create_job(
+            status=DocumentProcessingJob.Status.FAILED,
+            stage=DocumentProcessingJob.Stage.PARSE,
+            suffix="status-failed",
+        )
+        failed_job.provider_state = "failed"
+        failed_job.error_message = "Literature processing failed during parse."
+        failed_job.save(update_fields=("provider_state", "error_message", "updated_at"))
+        failed = self.client.get(self.status_url).json()
+
+        self.assertEqual(empty["status"], "not_queued")
+        self.assertTrue(empty["terminal"])
+        self.assertEqual(failed["job_id"], failed_job.pk)
+        self.assertEqual(failed["status"], "failed")
+        self.assertTrue(failed["failed"])
+        self.assertTrue(failed["terminal"])
+        self.assertEqual(failed["error_message"], "Literature processing failed during parse.")
 
     def test_completed_detail_shows_overview_parsed_text_and_pdf_page_evidence(self):
         job, document_parse, chunk, analysis = self.create_result()

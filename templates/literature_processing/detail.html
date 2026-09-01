@@ -23,11 +23,20 @@
     <p class="eyebrow">Processing</p>
     <h2 id="processing-title">处理状态</h2>
   </div>
-  <div class="processing-state">
-    <strong class="{% if processing_state.failed %}risk-text{% endif %}">{{ processing_state.label }}</strong>
-    <span>阶段：{{ processing_state.stage }}</span>
-    {% if latest_job %}<span>Parser：{{ latest_job.parser_name }}</span><span>Pipeline：{{ latest_job.pipeline_version }}</span><span>更新：{{ latest_job.updated_at|date:"Y-m-d H:i" }}</span>{% endif %}
-    {% if processing_state.failed and latest_job.error_message %}<span class="risk-text">{{ latest_job.error_message }}</span>{% endif %}
+  <div
+    class="processing-state"
+    id="processing-live-state"
+    data-status-url="{% url 'literature-processing-status' literature.pk %}"
+    data-terminal="{% if processing_state.terminal %}true{% else %}false{% endif %}"
+  >
+    <strong id="processing-status-label" class="{% if processing_state.failed %}risk-text{% endif %}">{{ processing_state.label }}</strong>
+    <span id="processing-stage-label">阶段：{{ processing_state.stage }}</span>
+    {% if latest_job %}<span>Parser：{{ latest_job.parser_name }}</span><span>Pipeline：{{ latest_job.pipeline_version }}</span><span id="processing-updated">更新：{{ latest_job.updated_at|date:"Y-m-d H:i" }}</span>{% endif %}
+    <div class="processing-progress" id="processing-progress"{% if processing_state.progress_percent == None %} hidden{% endif %}>
+      <progress id="processing-progress-bar" max="100" value="{{ processing_state.progress_percent|default:0 }}"></progress>
+      <span id="processing-progress-label">{% if processing_state.progress_total %}{{ processing_state.progress_current }} / {{ processing_state.progress_total }}{% endif %}</span>
+    </div>
+    <span id="processing-error" class="risk-text">{% if processing_state.failed %}{{ processing_state.error_message }}{% endif %}</span>
   </div>
 </section>
 
@@ -82,4 +91,46 @@
     </details>
   {% empty %}<p class="subtle">暂无解析文本。</p>{% endfor %}
 </section>
+{% if latest_job and not processing_state.terminal %}
+<script>
+(() => {
+  const root = document.getElementById("processing-live-state");
+  const statusLabel = document.getElementById("processing-status-label");
+  const stageLabel = document.getElementById("processing-stage-label");
+  const progress = document.getElementById("processing-progress");
+  const progressBar = document.getElementById("processing-progress-bar");
+  const progressLabel = document.getElementById("processing-progress-label");
+  const errorLabel = document.getElementById("processing-error");
+  let timer = null;
+
+  const unitLabel = (unit) => unit === "pages" ? "页" : unit === "segments" ? "分段" : "";
+  const refresh = async () => {
+    try {
+      const response = await fetch(root.dataset.statusUrl, {credentials: "same-origin", cache: "no-store"});
+      if (!response.ok) return;
+      const state = await response.json();
+      statusLabel.textContent = state.label;
+      statusLabel.classList.toggle("risk-text", state.failed);
+      stageLabel.textContent = `阶段：${state.stage}`;
+      errorLabel.textContent = state.error_message || "";
+      if (state.progress_percent !== null) {
+        progress.hidden = false;
+        progressBar.value = state.progress_percent;
+        progressLabel.textContent = `${state.progress_current} / ${state.progress_total} ${unitLabel(state.progress_unit)} (${state.progress_percent}%)`;
+      } else {
+        progress.hidden = true;
+      }
+      if (state.terminal) {
+        clearInterval(timer);
+        if (state.status === "succeeded") window.location.reload();
+      }
+    } catch (_) {
+      return;
+    }
+  };
+  timer = setInterval(refresh, 2000);
+  refresh();
+})();
+</script>
+{% endif %}
 {% endblock %}
