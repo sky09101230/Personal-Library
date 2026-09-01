@@ -7,7 +7,7 @@ from django.test import SimpleTestCase, TestCase
 from apps.box_upload.models import CanonicalDocument, UploadedDocument
 
 from ..artifacts import ArtifactReference, PARSE_ARTIFACT_CONTENT_TYPE
-from ..jobs import backfill_processing, enqueue_processing
+from ..jobs import backfill_processing, enqueue_processing, processing_status
 from ..models import DocumentParse, DocumentProcessingJob, LiteratureChunk
 from ..parsers import ParsedDocument, ParsedPage
 from ..persistence import persist_parsed_document
@@ -190,6 +190,21 @@ class ProcessingJobTests(TestCase):
             )
 
         self.assertFalse(DocumentProcessingJob.objects.filter(uploaded_document=upload).exists())
+
+    def test_processing_status_uses_current_pipeline_coverage(self):
+        initial = processing_status()
+        job, _ = enqueue_processing(self.upload)
+        queued = processing_status()
+        job.status = DocumentProcessingJob.Status.FAILED
+        job.save(update_fields=("status", "updated_at"))
+        failed = processing_status()
+
+        self.assertEqual(initial["uploads"], 1)
+        self.assertEqual(initial["uncovered"], 1)
+        self.assertEqual(queued["uncovered"], 0)
+        self.assertEqual(queued["jobs"]["queued"], 1)
+        self.assertEqual(failed["uncovered"], 1)
+        self.assertEqual(failed["jobs"]["failed"], 1)
 
 
 class SourcePdfDownloadTests(SimpleTestCase):

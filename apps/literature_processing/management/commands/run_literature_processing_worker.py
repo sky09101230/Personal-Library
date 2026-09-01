@@ -1,8 +1,6 @@
-import time
-
 from django.core.management.base import BaseCommand
 
-from apps.literature_processing.pipeline import process_next_job
+from apps.literature_processing.worker import run_worker
 
 
 class Command(BaseCommand):
@@ -14,18 +12,14 @@ class Command(BaseCommand):
         parser.add_argument("--poll-interval", type=float, default=2.0)
 
     def handle(self, *args, **options):
-        processed = 0
-        max_jobs = max(0, options["max_jobs"])
-        while True:
-            job = process_next_job()
-            if job is None:
-                if options["once"] or (max_jobs and processed >= max_jobs):
-                    break
-                time.sleep(max(0.2, options["poll_interval"]))
-                continue
-            processed += 1
+        def report(job):
             self.stdout.write(f"job={job.pk} status={job.status} stage={job.stage}")
-            if max_jobs and processed >= max_jobs:
-                break
-        self.stdout.write(self.style.SUCCESS(f"Processed {processed} literature processing job(s)."))
+
+        result = run_worker(
+            once=options["once"],
+            max_jobs=options["max_jobs"],
+            poll_interval=options["poll_interval"],
+            on_job=report,
+        )
+        self.stdout.write(self.style.SUCCESS(f"Processed {result.processed} literature processing job(s)."))
 

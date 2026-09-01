@@ -127,9 +127,11 @@ class ParsePersistenceTests(TestCase):
 
             def __init__(self):
                 self.uploaded = None
+                self.namespace = None
 
-            def upload(self, uploaded_file):
+            def upload(self, uploaded_file, namespace=""):
                 self.uploaded = b"".join(uploaded_file.chunks())
+                self.namespace = namespace
                 return "/Literature/derived-random.json"
 
         storage = FakeStorage()
@@ -144,6 +146,7 @@ class ParsePersistenceTests(TestCase):
 
         payload = json.loads(storage.uploaded)
         self.assertEqual(requested_backends, [self.upload.storage_backend])
+        self.assertEqual(storage.namespace, "derived/parses")
         self.assertEqual(payload["pages"][0], {"number": 1, "text": "Traceable page text."})
         self.assertEqual(payload["parser"], {"name": "test", "version": "test-parser-v1"})
         self.assertEqual(reference.path, "/Literature/derived-random.json")

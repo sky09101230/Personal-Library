@@ -14,6 +14,8 @@ from .services import LiteratureStorageError
 
 NJU_BOX = "nju_box"  # 历史数据库值；运行时已废弃。
 NAS_WEBDAV = "nas_webdav"
+ORIGINALS_NAMESPACE = "originals"
+PARSE_ARTIFACT_NAMESPACE = "derived/parses"
 _SAFE_EXTENSION = re.compile(r"^\.[A-Za-z0-9]{1,10}$")
 
 
@@ -27,7 +29,23 @@ class LiteratureStorage(ABC):
     name = ""
 
     @abstractmethod
-    def upload(self, uploaded_file):
+    def upload(self, uploaded_file, namespace=""):
+        raise NotImplementedError
+
+    @abstractmethod
+    def ensure_namespace(self, namespace):
+        raise NotImplementedError
+
+    @abstractmethod
+    def path_for(self, namespace, basename):
+        raise NotImplementedError
+
+    @abstractmethod
+    def exists(self, remote_path):
+        raise NotImplementedError
+
+    @abstractmethod
+    def move(self, source_path, destination_path):
         raise NotImplementedError
 
     @abstractmethod
@@ -49,14 +67,16 @@ class NasWebDavLiteratureStorage(LiteratureStorage):
         self.root = root if root is not None else os.environ.get("NAS_WEBDAV_LITERATURE_ROOT", "")
         self.timeout = timeout
         self._parts = self._validate_configuration()
+        self._ensured_namespaces = set()
         credentials = f"{self.username}:{self.password}".encode("utf-8")
         self._authorization = "Basic " + base64.b64encode(credentials).decode("ascii")
 
-    def upload(self, uploaded_file):
+    def upload(self, uploaded_file, namespace=""):
         extension = os.path.splitext(uploaded_file.name)[1].lower()
         if not _SAFE_EXTENSION.fullmatch(extension):
             extension = ".bin"
-        remote_path = f"{self.root}/{secrets.token_hex(16)}{extension}"
+        self.ensure_namespace(namespace)
+        remote_path = self.path_for(namespace, f"{secrets.token_hex(16)}{extension}")
         connection = self._connection()
         try:
             connection.putrequest("PUT", self._request_path(remote_path))
@@ -82,41 +102,127 @@ class NasWebDavLiteratureStorage(LiteratureStorage):
         return remote_path
 
     def ensure_root(self):
+        self._ensure_collection(self.root, "root")
+
+    def ensure_namespace(self, namespace):
+        namespace = self._validate_namespace(namespace)
+        if "" not in self._ensured_namespaces:
+            self.ensure_root()
+            self._ensured_namespaces.add("")
+        current_path = self.root
+        current_namespace = ""
+        for segment in namespace.split("/") if namespace else ():
+            current_namespace = segment if not current_namespace else f"{current_namespace}/{segment}"
+            current_path = f"{current_path}/{segment}"
+            if current_namespace in self._ensured_namespaces:
+                continue
+            self._ensure_collection(current_path, "namespace")
+            self._ensured_namespaces.add(current_namespace)
+        return current_path
+
+    def path_for(self, namespace, basename):
+        namespace = self._validate_namespace(namespace)
+        if (
+            not basename
+            or basename in (".", "..")
+            or "/" in basename
+            or "\\" in basename
+            or any(ord(character) < 32 for character in basename)
+        ):
+            raise LiteratureStorageError("NAS WebDAV object basename is invalid.")
+        prefix = self.root if not namespace else f"{self.root}/{namespace}"
+        return f"{prefix}/{basename}"
+
+    def exists(self, remote_path):
+        request_path = self._request_path(remote_path)
         connection = self._connection()
         try:
             connection.request(
                 "PROPFIND",
-                self._request_path(self.root),
+                request_path,
                 headers={"Authorization": self._authorization, "Depth": "0"},
             )
             response = connection.getresponse()
             status = response.status
             response.read()
         except (OSError, http.client.HTTPException) as exc:
-            raise LiteratureStorageError("Could not connect to NAS WebDAV to check the storage root.") from exc
+            raise LiteratureStorageError("Could not connect to NAS WebDAV to check an object.") from exc
+        finally:
+            connection.close()
+        if status in (200, 207):
+            return True
+        if status == 404:
+            return False
+        raise LiteratureStorageError(f"NAS WebDAV object check failed (HTTP {status}).")
+
+    def move(self, source_path, destination_path):
+        source_request_path = self._request_path(source_path)
+        destination_request_path = self._request_path(destination_path)
+        if source_path == destination_path:
+            raise LiteratureStorageError("NAS WebDAV MOVE source and destination must differ.")
+        relative_destination = destination_path[len(self.root):].lstrip("/")
+        destination_segments = relative_destination.split("/")
+        if len(destination_segments) < 1 or not destination_segments[-1]:
+            raise LiteratureStorageError("NAS WebDAV MOVE destination must name an object.")
+        self.ensure_namespace("/".join(destination_segments[:-1]))
+
+        connection = self._connection()
+        try:
+            connection.request(
+                "MOVE",
+                source_request_path,
+                headers={
+                    "Authorization": self._authorization,
+                    "Destination": f"{self.base_url}{destination_request_path}",
+                    "Overwrite": "F",
+                },
+            )
+            response = connection.getresponse()
+            status = response.status
+            response.read()
+        except (OSError, http.client.HTTPException) as exc:
+            raise LiteratureStorageError("Could not connect to NAS WebDAV to move an object.") from exc
+        finally:
+            connection.close()
+        if status not in (201, 204):
+            raise LiteratureStorageError(f"NAS WebDAV MOVE failed (HTTP {status}).")
+
+    def _ensure_collection(self, remote_path, label):
+        connection = self._connection()
+        try:
+            connection.request(
+                "PROPFIND",
+                self._request_path(remote_path),
+                headers={"Authorization": self._authorization, "Depth": "0"},
+            )
+            response = connection.getresponse()
+            status = response.status
+            response.read()
+        except (OSError, http.client.HTTPException) as exc:
+            raise LiteratureStorageError(f"Could not connect to NAS WebDAV to check the storage {label}.") from exc
         finally:
             connection.close()
         if status in (200, 207):
             return
         if status != 404:
-            raise LiteratureStorageError(f"NAS WebDAV root check failed (HTTP {status}).")
+            raise LiteratureStorageError(f"NAS WebDAV {label} check failed (HTTP {status}).")
 
         connection = self._connection()
         try:
             connection.request(
                 "MKCOL",
-                self._request_path(self.root),
+                self._request_path(remote_path),
                 headers={"Authorization": self._authorization},
             )
             response = connection.getresponse()
             status = response.status
             response.read()
         except (OSError, http.client.HTTPException) as exc:
-            raise LiteratureStorageError("Could not connect to NAS WebDAV to create the storage root.") from exc
+            raise LiteratureStorageError(f"Could not connect to NAS WebDAV to create the storage {label}.") from exc
         finally:
             connection.close()
         if status not in (201, 405):
-            raise LiteratureStorageError(f"NAS WebDAV root creation failed (HTTP {status}).")
+            raise LiteratureStorageError(f"NAS WebDAV {label} creation failed (HTTP {status}).")
 
     def open_stream(self, remote_path, byte_range=None):
         request_path = self._request_path(remote_path)
@@ -189,11 +295,27 @@ class NasWebDavLiteratureStorage(LiteratureStorage):
         if not remote_path.startswith("/") or "\\" in remote_path:
             raise LiteratureStorageError("NAS WebDAV object path must be absolute.")
         segments = remote_path.split("/")[1:]
-        if any(segment in ("", ".", "..") for segment in segments):
+        if any(segment in ("", ".", "..") for segment in segments) or any(
+            ord(character) < 32 for character in remote_path
+        ):
             raise LiteratureStorageError("NAS WebDAV object path is invalid.")
         if remote_path != self.root and not remote_path.startswith(f"{self.root}/"):
             raise LiteratureStorageError("NAS WebDAV object path is outside the configured root.")
         return quote(remote_path, safe="/")
+
+    def _validate_namespace(self, namespace):
+        if not isinstance(namespace, str) or "\\" in namespace:
+            raise LiteratureStorageError("NAS WebDAV namespace must be a safe relative path.")
+        if not namespace:
+            return ""
+        segments = namespace.split("/")
+        if (
+            namespace.startswith("/")
+            or any(segment in ("", ".", "..") for segment in segments)
+            or any(ord(character) < 32 for character in namespace)
+        ):
+            raise LiteratureStorageError("NAS WebDAV namespace must be a safe relative path.")
+        return namespace
 
 
 def get_literature_storage(backend=None):
@@ -207,7 +329,10 @@ def get_literature_storage(backend=None):
 
 def store_literature(uploaded_file):
     storage = get_literature_storage()
-    return StoredLiteratureObject(storage.name, storage.upload(uploaded_file))
+    return StoredLiteratureObject(
+        storage.name,
+        storage.upload(uploaded_file, namespace=ORIGINALS_NAMESPACE),
+    )
 
 
 def open_literature_stream(document, byte_range=None):

@@ -4,7 +4,7 @@ import json
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 
-from apps.box_upload.storage import get_literature_storage
+from apps.box_upload.storage import PARSE_ARTIFACT_NAMESPACE, get_literature_storage
 
 
 PARSE_ARTIFACT_CONTENT_TYPE = "application/vnd.plab.parsed-document+json"
@@ -33,7 +33,7 @@ def store_parse_artifact(uploaded_document, job, parsed_document, *, storage_fac
     filename = f"parse-{uploaded_document.pk}-{job.run_id}-{parsed_document.schema_version}.json"
     artifact_file = SimpleUploadedFile(filename, content, content_type=PARSE_ARTIFACT_CONTENT_TYPE)
     storage = storage_factory(uploaded_document.storage_backend)
-    path = storage.upload(artifact_file)
+    path = storage.upload(artifact_file, namespace=PARSE_ARTIFACT_NAMESPACE)
     return ArtifactReference(
         storage_backend=storage.name,
         path=path,
@@ -41,4 +41,3 @@ def store_parse_artifact(uploaded_document, job, parsed_document, *, storage_fac
         content_type=PARSE_ARTIFACT_CONTENT_TYPE,
         size=len(content),
     )
-

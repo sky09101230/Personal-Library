@@ -1,7 +1,7 @@
 import logging
 
 from django.db import IntegrityError, transaction
-from django.db.models import Exists, OuterRef
+from django.db.models import Count, Exists, OuterRef
 
 from apps.box_upload.models import UploadedDocument
 
@@ -88,9 +88,37 @@ def backfill_processing(*, limit=100, force=False):
     return {"created": created, "reused": reused}
 
 
+def processing_status():
+    uploads = UploadedDocument.objects.filter(
+        status=UploadedDocument.Status.UPLOADED,
+        file_role=UploadedDocument.FileRole.PRIMARY,
+    )
+    covered = DocumentProcessingJob.objects.filter(
+        uploaded_document_id=OuterRef("pk"),
+        status__in=(*ACTIVE_STATUSES, DocumentProcessingJob.Status.SUCCEEDED),
+        **current_versions(),
+    )
+    job_counts = {
+        row["status"]: row["count"]
+        for row in DocumentProcessingJob.objects.values("status").annotate(count=Count("pk"))
+    }
+    return {
+        "uploads": uploads.count(),
+        "uncovered": uploads.annotate(is_covered=Exists(covered)).filter(is_covered=False).count(),
+        "jobs": {
+            status: job_counts.get(status, 0)
+            for status in (
+                DocumentProcessingJob.Status.QUEUED,
+                DocumentProcessingJob.Status.RUNNING,
+                DocumentProcessingJob.Status.SUCCEEDED,
+                DocumentProcessingJob.Status.FAILED,
+            )
+        },
+    }
+
+
 def _is_eligible(upload):
     return (
         upload.status == UploadedDocument.Status.UPLOADED
         and upload.file_role == UploadedDocument.FileRole.PRIMARY
     )
-

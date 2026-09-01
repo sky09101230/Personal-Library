@@ -6,7 +6,14 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase
 
 from .services import LiteratureStorageError
-from .storage import NAS_WEBDAV, NJU_BOX, NasWebDavLiteratureStorage, get_literature_storage
+from .storage import (
+    NAS_WEBDAV,
+    NJU_BOX,
+    ORIGINALS_NAMESPACE,
+    NasWebDavLiteratureStorage,
+    get_literature_storage,
+    store_literature,
+)
 from .metadata_jobs import _download_source_pdf
 
 
@@ -68,13 +75,19 @@ class NasWebDavLiteratureStorageTests(SimpleTestCase):
     @patch.dict(os.environ, config, clear=False)
     @patch("apps.box_upload.storage.http.client.HTTPSConnection")
     def test_upload_streams_to_unique_object(self, connection_class):
+        root_response = MagicMock(status=207)
+        namespace_response = MagicMock(status=207)
         response = MagicMock(status=201)
-        connection_class.return_value.getresponse.return_value = response
+        connection_class.return_value.getresponse.side_effect = [
+            root_response,
+            namespace_response,
+            response,
+        ]
         uploaded_file = SimpleUploadedFile("paper.pdf", b"%PDF-1.7\ncontent", content_type="application/pdf")
 
-        path = NasWebDavLiteratureStorage().upload(uploaded_file)
+        path = NasWebDavLiteratureStorage().upload(uploaded_file, namespace=ORIGINALS_NAMESPACE)
 
-        self.assertTrue(path.startswith("/public/PLAB_KnowledgeBase/Literature/"))
+        self.assertTrue(path.startswith("/public/PLAB_KnowledgeBase/Literature/originals/"))
         self.assertTrue(path.endswith(".pdf"))
         connection = connection_class.return_value
         connection.putrequest.assert_called_once_with("PUT", path)
@@ -82,7 +95,144 @@ class NasWebDavLiteratureStorageTests(SimpleTestCase):
         connection.putheader.assert_any_call("Content-Type", "application/pdf")
         connection.send.assert_called_once_with(b"%PDF-1.7\ncontent")
         response.read.assert_called_once_with()
-        connection.close.assert_called_once_with()
+        self.assertEqual(connection.close.call_count, 3)
+
+    @patch.dict(os.environ, config, clear=False)
+    @patch("apps.box_upload.storage.http.client.HTTPSConnection")
+    def test_ensure_namespace_creates_nested_directories(self, connection_class):
+        connection_class.return_value.getresponse.side_effect = [
+            MagicMock(status=207),
+            MagicMock(status=404),
+            MagicMock(status=201),
+            MagicMock(status=404),
+            MagicMock(status=201),
+        ]
+        storage = NasWebDavLiteratureStorage()
+
+        path = storage.ensure_namespace("derived/parses")
+
+        self.assertEqual(path, "/public/PLAB_KnowledgeBase/Literature/derived/parses")
+        requests = connection_class.return_value.request.call_args_list
+        self.assertEqual(requests[0].args[:2], ("PROPFIND", "/public/PLAB_KnowledgeBase/Literature"))
+        self.assertEqual(requests[1].args[:2], ("PROPFIND", "/public/PLAB_KnowledgeBase/Literature/derived"))
+        self.assertEqual(requests[2].args[:2], ("MKCOL", "/public/PLAB_KnowledgeBase/Literature/derived"))
+        self.assertEqual(requests[3].args[:2], ("PROPFIND", "/public/PLAB_KnowledgeBase/Literature/derived/parses"))
+        self.assertEqual(requests[4].args[:2], ("MKCOL", "/public/PLAB_KnowledgeBase/Literature/derived/parses"))
+
+    @patch.dict(os.environ, config, clear=False)
+    @patch("apps.box_upload.storage.http.client.HTTPSConnection")
+    def test_ensure_namespace_reuses_successful_checks_on_same_adapter(self, connection_class):
+        connection_class.return_value.getresponse.side_effect = [
+            MagicMock(status=207),
+            MagicMock(status=207),
+        ]
+        storage = NasWebDavLiteratureStorage()
+
+        storage.ensure_namespace("originals")
+        storage.ensure_namespace("originals")
+
+        self.assertEqual(connection_class.return_value.request.call_count, 2)
+
+    @patch.dict(os.environ, config, clear=False)
+    def test_namespace_and_basename_reject_traversal(self):
+        storage = NasWebDavLiteratureStorage()
+
+        for namespace in ("/originals", "../originals", "derived//parses", "derived\\parses"):
+            with self.subTest(namespace=namespace), self.assertRaises(LiteratureStorageError):
+                storage.path_for(namespace, "paper.pdf")
+        for basename in ("", "..", "nested/paper.pdf", "nested\\paper.pdf"):
+            with self.subTest(basename=basename), self.assertRaises(LiteratureStorageError):
+                storage.path_for("originals", basename)
+
+    @patch.dict(os.environ, config, clear=False)
+    @patch("apps.box_upload.storage.http.client.HTTPSConnection")
+    def test_exists_distinguishes_present_and_missing_objects(self, connection_class):
+        connection_class.return_value.getresponse.side_effect = [
+            MagicMock(status=207),
+            MagicMock(status=404),
+        ]
+        storage = NasWebDavLiteratureStorage()
+        path = "/public/PLAB_KnowledgeBase/Literature/originals/paper.pdf"
+
+        self.assertTrue(storage.exists(path))
+        self.assertFalse(storage.exists(path))
+
+    @patch.dict(os.environ, config, clear=False)
+    @patch("apps.box_upload.storage.http.client.HTTPSConnection")
+    def test_move_encodes_paths_and_disables_overwrite(self, connection_class):
+        connection_class.return_value.getresponse.side_effect = [
+            MagicMock(status=207),
+            MagicMock(status=207),
+            MagicMock(status=201),
+        ]
+        storage = NasWebDavLiteratureStorage()
+
+        storage.move(
+            "/public/PLAB_KnowledgeBase/Literature/测试 paper.pdf",
+            "/public/PLAB_KnowledgeBase/Literature/originals/测试 paper.pdf",
+        )
+
+        connection_class.return_value.request.assert_called_with(
+            "MOVE",
+            "/public/PLAB_KnowledgeBase/Literature/%E6%B5%8B%E8%AF%95%20paper.pdf",
+            headers={
+                "Authorization": storage._authorization,
+                "Destination": "https://nas.example.test:5006/public/PLAB_KnowledgeBase/Literature/originals/%E6%B5%8B%E8%AF%95%20paper.pdf",
+                "Overwrite": "F",
+            },
+        )
+
+    @patch.dict(os.environ, config, clear=False)
+    @patch("apps.box_upload.storage.http.client.HTTPSConnection")
+    def test_move_rejects_outside_root_before_request(self, connection_class):
+        storage = NasWebDavLiteratureStorage()
+
+        with self.assertRaises(LiteratureStorageError):
+            storage.move(
+                "/private/paper.pdf",
+                "/public/PLAB_KnowledgeBase/Literature/originals/paper.pdf",
+            )
+
+        connection_class.assert_not_called()
+
+    @patch.dict(os.environ, config, clear=False)
+    @patch("apps.box_upload.storage.http.client.HTTPSConnection")
+    def test_move_rejects_same_path_before_request(self, connection_class):
+        storage = NasWebDavLiteratureStorage()
+        path = "/public/PLAB_KnowledgeBase/Literature/originals/paper.pdf"
+
+        with self.assertRaisesMessage(LiteratureStorageError, "must differ"):
+            storage.move(path, path)
+
+        connection_class.assert_not_called()
+
+    @patch.dict(os.environ, config, clear=False)
+    @patch("apps.box_upload.storage.http.client.HTTPSConnection")
+    def test_move_does_not_accept_remote_overwrite_conflict(self, connection_class):
+        connection_class.return_value.getresponse.side_effect = [
+            MagicMock(status=207),
+            MagicMock(status=207),
+            MagicMock(status=412),
+        ]
+        storage = NasWebDavLiteratureStorage()
+
+        with self.assertRaisesMessage(LiteratureStorageError, "HTTP 412"):
+            storage.move(
+                "/public/PLAB_KnowledgeBase/Literature/paper.pdf",
+                "/public/PLAB_KnowledgeBase/Literature/originals/paper.pdf",
+            )
+
+    @patch("apps.box_upload.storage.get_literature_storage")
+    def test_store_literature_uses_originals_namespace(self, get_storage):
+        storage = get_storage.return_value
+        storage.name = NAS_WEBDAV
+        storage.upload.return_value = "/Literature/originals/paper.pdf"
+        uploaded_file = SimpleUploadedFile("paper.pdf", b"%PDF")
+
+        stored = store_literature(uploaded_file)
+
+        storage.upload.assert_called_once_with(uploaded_file, namespace=ORIGINALS_NAMESPACE)
+        self.assertEqual(stored.remote_path, "/Literature/originals/paper.pdf")
 
     @patch.dict(os.environ, config, clear=False)
     @patch("apps.box_upload.storage.http.client.HTTPSConnection")
