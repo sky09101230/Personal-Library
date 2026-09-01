@@ -57,10 +57,18 @@ def _read_segment(segment):
             legacy = sorted(
                 name
                 for name in names
-                if name.lower().endswith("_content_list.json")
-                and not name.lower().endswith("_content_list_v2.json")
+                if PurePosixPath(name).name.lower() == "content_list.json"
+                or (
+                    name.lower().endswith("_content_list.json")
+                    and not name.lower().endswith("_content_list_v2.json")
+                )
             )
-            v2 = sorted(name for name in names if name.lower().endswith("_content_list_v2.json"))
+            v2 = sorted(
+                name
+                for name in names
+                if PurePosixPath(name).name.lower() == "content_list_v2.json"
+                or name.lower().endswith("_content_list_v2.json")
+            )
             if legacy:
                 source_name = legacy[0]
                 source_format = "content_list"

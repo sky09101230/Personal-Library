@@ -76,7 +76,8 @@ class Command(BaseCommand):
                 raise CommandError(f"Upload {upload.pk} is not an eligible primary PDF.")
             self.stdout.write(
                 self.style.SUCCESS(
-                    f"job={job.pk} status={job.status} created={'yes' if created else 'no'}"
+                    f"job={job.pk} parser={options['parser']} status={job.status} "
+                    f"created={'yes' if created else 'no'}"
                 )
             )
             return
@@ -140,7 +141,9 @@ class Command(BaseCommand):
             raise CommandError("Literature layout migration completed with conflicts or errors.")
 
     def _report_job(self, job):
-        self.stdout.write(f"job={job.pk} status={job.status} stage={job.stage}")
+        self.stdout.write(
+            f"job={job.pk} parser={job.parser_name} status={job.status} stage={job.stage}"
+        )
 
 
 def _add_worker_arguments(parser):

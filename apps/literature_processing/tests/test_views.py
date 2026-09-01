@@ -66,6 +66,16 @@ class LiteratureDetailViewTests(TestCase):
             artifact_path=f"/Literature/{job.run_id}.json",
             artifact_sha256="e" * 64,
             artifact_size=100,
+            raw_artifact_storage_backend=self.upload.storage_backend,
+            raw_artifact_path=f"/Literature/{job.run_id}-raw.zip",
+            raw_artifact_sha256="a" * 64,
+            raw_artifact_content_type="application/vnd.plab.mineru-result+zip",
+            raw_artifact_size=200,
+            runtime_info={
+                "model_version": "vlm",
+                "batch_id": "batch-test",
+                "page_ranges": ["1-2"],
+            },
         )
         text = "Evidence preserved from page two."
         chunk = LiteratureChunk.objects.create(
@@ -78,6 +88,8 @@ class LiteratureDetailViewTests(TestCase):
             end_offset=len(text),
             text=text,
             content_sha256="f" * 64,
+            end_page_number=2,
+            section_path=["Results"],
         )
         analysis = DocumentAnalysis.objects.create(
             document_parse=document_parse,
@@ -156,6 +168,11 @@ class LiteratureDetailViewTests(TestCase):
         self.assertContains(response, "PDF 第 2 页")
         self.assertContains(response, f'id="chunk-{chunk.pk}"')
         self.assertContains(response, "Evidence preserved from page two.")
+        self.assertContains(response, "Model")
+        self.assertContains(response, "vlm")
+        self.assertContains(response, "batch-test")
+        self.assertContains(response, "1-2")
+        self.assertContains(response, "Results")
 
     def test_latest_failure_does_not_hide_previous_successful_result(self):
         _, _, _, analysis = self.create_result("old")

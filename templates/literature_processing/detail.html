@@ -26,7 +26,7 @@
   <div class="processing-state">
     <strong class="{% if processing_state.failed %}risk-text{% endif %}">{{ processing_state.label }}</strong>
     <span>阶段：{{ processing_state.stage }}</span>
-    {% if latest_job %}<span>Pipeline：{{ latest_job.pipeline_version }}</span><span>更新：{{ latest_job.updated_at|date:"Y-m-d H:i" }}</span>{% endif %}
+    {% if latest_job %}<span>Parser：{{ latest_job.parser_name }}</span><span>Pipeline：{{ latest_job.pipeline_version }}</span><span>更新：{{ latest_job.updated_at|date:"Y-m-d H:i" }}</span>{% endif %}
     {% if processing_state.failed and latest_job.error_message %}<span class="risk-text">{{ latest_job.error_message }}</span>{% endif %}
   </div>
 </section>
@@ -59,6 +59,10 @@
         <dt>Parser</dt><dd>{{ result_parse.parser_name }} {{ result_parse.parser_version }}</dd>
         <dt>页数</dt><dd>{{ result_parse.page_count }}</dd>
         <dt>Schema</dt><dd>{{ result_parse.schema_version }}</dd>
+        {% if result_parse.runtime_info.model_version %}<dt>Model</dt><dd>{{ result_parse.runtime_info.model_version }}</dd>{% endif %}
+        {% if result_parse.runtime_info.batch_id %}<dt>Batch</dt><dd>{{ result_parse.runtime_info.batch_id }}</dd>{% endif %}
+        {% if result_parse.runtime_info.page_ranges %}<dt>Page ranges</dt><dd>{{ result_parse.runtime_info.page_ranges|join:", " }}</dd>{% endif %}
+        {% if result_parse.raw_artifact_sha256 %}<dt>Raw artifact</dt><dd>{{ result_parse.raw_artifact_sha256|slice:":12" }}…</dd>{% endif %}
         <dt>Artifact</dt><dd>{{ result_parse.artifact_sha256|slice:":12" }}…</dd>
       </dl>
       {% if result_parse.warnings %}<ul class="parse-warnings">{% for warning in result_parse.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>{% endif %}
@@ -73,7 +77,7 @@
     <details class="parsed-page"{% if forloop.first %} open{% endif %}>
       <summary><span>第 {{ page.number }} 页</span><span>{{ page.chunks|length }} 个片段</span></summary>
       <div class="page-chunks">
-        {% for chunk in page.chunks %}<article id="chunk-{{ chunk.pk }}" class="parsed-chunk"><div class="chunk-meta">{{ chunk.chunk_key }}</div><p>{{ chunk.text }}</p></article>{% endfor %}
+        {% for chunk in page.chunks %}<article id="chunk-{{ chunk.pk }}" class="parsed-chunk"><div class="chunk-meta">{{ chunk.chunk_key }}{% if chunk.end_page_number and chunk.end_page_number != chunk.page_number %} · 页 {{ chunk.page_number }}–{{ chunk.end_page_number }}{% endif %}{% if chunk.section_path %} · {{ chunk.section_path|join:" / " }}{% endif %}</div><p>{{ chunk.text }}</p></article>{% endfor %}
       </div>
     </details>
   {% empty %}<p class="subtle">暂无解析文本。</p>{% endfor %}

@@ -41,6 +41,9 @@ class MinerUConfigurationTests(SimpleTestCase):
 
         self.assertEqual([item.expression for item in ranges], ["1-200", "201-400", "401-585"])
 
+    def test_config_repr_never_contains_token(self):
+        self.assertNotIn("test-token", repr(config()))
+
 
 class MinerUClientTests(SimpleTestCase):
     def test_upload_poll_and_download_use_official_batch_flow(self):

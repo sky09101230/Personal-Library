@@ -252,7 +252,12 @@ def _v2_item(item, segment, source_index, warnings):
             structured_content={"format": "html", "body": body},
         )]
     if source_type in {"image", "chart"}:
-        return [_draft(
+        caption = _inline_text(
+            content.get("chart_caption")
+            if source_type == "chart"
+            else content.get("image_caption")
+        ).strip()
+        blocks = [_draft(
             BlockKind.FIGURE,
             "",
             source,
@@ -262,6 +267,9 @@ def _v2_item(item, segment, source_index, warnings):
                 "visual_kind": source_type,
             },
         )]
+        if caption:
+            blocks.append(_draft(BlockKind.FIGURE_CAPTION, caption, source, bbox))
+        return blocks
     if source_type == "page_header":
         return [_draft(BlockKind.HEADER, _inline_text(content), source, bbox)]
     if source_type in {"page_footer", "page_number", "page_footnote"}:

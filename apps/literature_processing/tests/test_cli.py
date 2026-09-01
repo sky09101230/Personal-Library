@@ -114,7 +114,7 @@ class PlabCommandTests(TestCase):
         )
 
         enqueue.assert_called_once_with(self.upload, force=False, parser_name="pypdf")
-        self.assertIn("job=12 status=queued created=yes", output.getvalue())
+        self.assertIn("job=12 parser=pypdf status=queued created=yes", output.getvalue())
 
     @patch("apps.literature_processing.management.commands.plab.enqueue_processing")
     def test_literature_enqueue_accepts_explicit_mineru_parser(self, enqueue):

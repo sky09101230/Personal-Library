@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import os
 from time import monotonic, sleep
@@ -36,7 +36,7 @@ class MinerUTimeoutError(MinerUError):
 @dataclass(frozen=True, slots=True)
 class MinerUConfig:
     base_url: str
-    token: str
+    token: str = field(repr=False)
     model_version: str
     request_timeout: int
     poll_interval: float
@@ -137,6 +137,7 @@ class MinerUClient:
 
         results = self._poll_batch(batch_id, file_specs)
         segments = []
+        total_result_bytes = 0
         for index, (page_range, file_spec) in enumerate(zip(page_ranges, file_specs, strict=True)):
             item = results[file_spec["data_id"]]
             result_url = _require_https_url(item.get("full_zip_url"), "result URL")
@@ -147,7 +148,8 @@ class MinerUClient:
                     self.config.result_max_bytes,
                 )
             )
-            if len(archive_bytes) > self.config.result_max_bytes:
+            total_result_bytes += len(archive_bytes)
+            if total_result_bytes > self.config.result_max_bytes:
                 raise MinerUAPIError("MinerU result archive exceeds the configured size limit.")
             segments.append(
                 MinerUSegmentResult(
@@ -296,9 +298,9 @@ def _put_bytes(url, content, timeout):
         raise MinerUAPIError(
             "MinerU pre-signed upload failed.",
             retryable=exc.code == 429 or exc.code >= 500,
-        ) from exc
+        ) from None
     except (TimeoutError, URLError, OSError) as exc:
-        raise MinerUAPIError("MinerU upload transport failed.", retryable=True) from exc
+        raise MinerUAPIError("MinerU upload transport failed.", retryable=True) from None
 
 
 def _request_bytes(url, timeout, max_bytes):
@@ -310,9 +312,9 @@ def _request_bytes(url, timeout, max_bytes):
         raise MinerUAPIError(
             "MinerU result download failed.",
             retryable=exc.code == 429 or exc.code >= 500,
-        ) from exc
+        ) from None
     except (TimeoutError, URLError, OSError) as exc:
-        raise MinerUAPIError("MinerU result transport failed.", retryable=True) from exc
+        raise MinerUAPIError("MinerU result transport failed.", retryable=True) from None
     if len(content) > max_bytes:
         raise MinerUAPIError("MinerU result archive exceeds the configured size limit.")
     return content
