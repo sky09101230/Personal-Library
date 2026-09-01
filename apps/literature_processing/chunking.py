@@ -4,7 +4,7 @@ import hashlib
 from .parsers import ParsedDocument
 
 
-CHUNKER_VERSION = "page-chars-v1"
+CHUNKER_VERSION = "page-chars-v2"
 DEFAULT_MAX_CHARS = 2000
 DEFAULT_OVERLAP_CHARS = 200
 _BREAK_MARKERS = ("\n\n", "\n", "。", "！", "？", ". ", "! ", "? ", "; ")
