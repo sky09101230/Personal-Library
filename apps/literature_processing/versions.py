@@ -10,7 +10,7 @@ DEFAULT_PARSER_NAME = PyPdfParser.name
 PIPELINE_VERSION = "literature-overview-v1"
 PARSER_NAME = DEFAULT_PARSER_NAME
 PARSER_VERSION = PyPdfParser.parser_version
-PROMPT_VERSION = "overview-v1"
+PROMPT_VERSION = "overview-v2"
 MINERU_PIPELINE_VERSION = "literature-mineru-v1"
 
 

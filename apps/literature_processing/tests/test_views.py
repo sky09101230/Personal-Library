@@ -110,6 +110,17 @@ class LiteratureDetailViewTests(TestCase):
                         "evidence": [{"chunk_id": chunk.pk, "page": 2}],
                     }
                 ],
+                "chinese_translation": {
+                    "summary_short": "简短综述。",
+                    "summary": "基于解析页面的中文翻译。",
+                    "topics": ["可追溯性"],
+                    "key_points": [
+                        {
+                            "text": "可追溯的中文结论。",
+                            "evidence": [{"chunk_id": chunk.pk, "page": 2}],
+                        }
+                    ],
+                },
             },
         )
         return job, document_parse, chunk, analysis
@@ -232,8 +243,13 @@ class LiteratureDetailViewTests(TestCase):
         self.assertEqual(response.context["overview"], analysis)
         self.assertContains(response, "处理完成")
         self.assertContains(response, "Short overview.")
+        self.assertContains(response, "简短综述。")
         self.assertContains(response, "traceability")
         self.assertContains(response, "Traceable point.")
+        self.assertContains(response, 'data-overview-language="en"')
+        self.assertContains(response, 'data-overview-language="zh"')
+        self.assertContains(response, 'id="overview-panel-zh"')
+        self.assertContains(response, "PDF page 2")
         self.assertContains(response, evidence_url)
         self.assertContains(response, "PDF 第 2 页")
         self.assertContains(response, f'id="chunk-{chunk.pk}"')
@@ -259,6 +275,18 @@ class LiteratureDetailViewTests(TestCase):
         self.assertEqual(response.context["overview"], analysis)
         self.assertContains(response, "处理失败")
         self.assertContains(response, "Short overview.")
+
+    def test_legacy_single_language_overview_remains_visible_without_switch(self):
+        _, _, _, analysis = self.create_result("legacy")
+        analysis.schema_version = "plab.overview.v1"
+        analysis.payload.pop("chinese_translation")
+        analysis.save(update_fields=("schema_version", "payload"))
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, "Short overview.")
+        self.assertNotContains(response, "data-overview-language")
 
     def test_library_links_to_processing_detail(self):
         self.client.force_login(self.user)

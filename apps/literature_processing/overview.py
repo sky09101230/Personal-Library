@@ -6,7 +6,7 @@ from .overview_provider import OverviewGenerationError, generate_deepseek_overvi
 from .versions import PROMPT_VERSION
 
 
-OVERVIEW_SCHEMA_VERSION = "plab.overview.v1"
+OVERVIEW_SCHEMA_VERSION = "plab.overview.v2"
 OVERVIEW_INPUT_MAX_CHARS = 80_000
 
 
@@ -59,4 +59,3 @@ def generate_and_persist_overview(document_parse, *, generator=generate_deepseek
         input_fingerprint=overview_input_fingerprint(packet),
         payload=generated["payload"],
     )
-

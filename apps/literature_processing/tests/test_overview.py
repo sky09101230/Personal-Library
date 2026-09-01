@@ -26,6 +26,12 @@ from ..versions import PARSER_VERSION, PROMPT_VERSION
 
 
 def overview_payload(chunk, *, page=None, chunk_id=None):
+    evidence = [
+        {
+            "chunk_id": chunk.pk if chunk_id is None else chunk_id,
+            "page": chunk.page_number if page is None else page,
+        }
+    ]
     return {
         "summary_short": "Short generated summary.",
         "summary": "A longer generated summary grounded in parsed text.",
@@ -33,14 +39,20 @@ def overview_payload(chunk, *, page=None, chunk_id=None):
         "key_points": [
             {
                 "text": "A traceable key point.",
-                "evidence": [
-                    {
-                        "chunk_id": chunk.pk if chunk_id is None else chunk_id,
-                        "page": chunk.page_number if page is None else page,
-                    }
-                ],
+                "evidence": evidence,
             }
         ],
+        "chinese_translation": {
+            "summary_short": "简短的生成摘要。",
+            "summary": "基于解析文本生成的较长摘要。",
+            "topics": ["通用主题"],
+            "key_points": [
+                {
+                    "text": "一条可追溯的关键结论。",
+                    "evidence": evidence,
+                }
+            ],
+        },
     }
 
 
@@ -142,6 +154,15 @@ class OverviewValidationTests(OverviewTestDataMixin, TestCase):
         with self.assertRaises(ValidationError):
             self.create_analysis(payload)
 
+    def test_translation_must_preserve_english_evidence(self):
+        payload = overview_payload(self.chunk)
+        payload["chinese_translation"]["key_points"][0]["evidence"] = [
+            {"chunk_id": self.chunk.pk, "page": 1}
+        ]
+
+        with self.assertRaises(ValidationError):
+            self.create_analysis(payload)
+
 
 class OverviewProviderTests(OverviewTestDataMixin, TestCase):
     @patch.dict(
@@ -170,6 +191,9 @@ class OverviewProviderTests(OverviewTestDataMixin, TestCase):
         analysis = generate_and_persist_overview(self.document_parse, generator=lambda value: generated)
 
         self.assertEqual(calls[0][1]["response_format"], {"type": "json_object"})
+        self.assertEqual(calls[0][1]["max_tokens"], 8192)
+        self.assertIn("Write the literature overview in English first", calls[0][1]["messages"][0]["content"])
+        self.assertIn('"chinese_translation"', calls[0][1]["messages"][0]["content"])
         self.assertEqual(calls[0][2], "test-key")
         self.assertEqual(analysis.provider, "deepseek")
         self.assertEqual(analysis.model, "returned-model")

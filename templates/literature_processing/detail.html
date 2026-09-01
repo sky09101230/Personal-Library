@@ -42,22 +42,48 @@
 
 <div class="literature-result-grid">
   <section class="detail-section" aria-labelledby="overview-title">
-    <p class="eyebrow">Generated Analysis</p>
-    <h2 id="overview-title">AI Overview</h2>
     {% if overview %}
+      {% with translation=overview.payload.chinese_translation %}
+      <div class="overview-heading">
+        <div><p class="eyebrow">Generated Analysis</p><h2 id="overview-title">AI Overview</h2></div>
+        {% if translation %}
+        <div class="overview-language-switch" role="group" aria-label="AI Overview language">
+          <button type="button" class="active" data-overview-language="en" aria-controls="overview-panel-en" aria-pressed="true">English</button>
+          <button type="button" data-overview-language="zh" aria-controls="overview-panel-zh" aria-pressed="false">中文</button>
+        </div>
+        {% endif %}
+      </div>
+      <div id="overview-panel-en" class="overview-panel" data-overview-panel="en"{% if translation %} lang="en"{% endif %}>
       <p class="overview-short">{{ overview.payload.summary_short }}</p>
       <p class="overview-summary">{{ overview.payload.summary }}</p>
-      {% if overview.payload.topics %}<div class="topic-list" aria-label="主题">{% for topic in overview.payload.topics %}<span class="tag">{{ topic }}</span>{% endfor %}</div>{% endif %}
+      {% if overview.payload.topics %}<div class="topic-list" aria-label="{% if translation %}Topics{% else %}主题{% endif %}">{% for topic in overview.payload.topics %}<span class="tag">{{ topic }}</span>{% endfor %}</div>{% endif %}
       <ol class="key-point-list">
         {% for point in overview.payload.key_points %}
         <li>
           <p>{{ point.text }}</p>
-          <div class="evidence-links">{% for evidence in point.evidence %}{% if source_upload %}<a href="{% url 'view-document' source_upload.pk %}#page={{ evidence.page }}" target="_blank" rel="noopener">PDF 第 {{ evidence.page }} 页</a>{% endif %}<a href="#chunk-{{ evidence.chunk_id }}">片段 {{ evidence.chunk_id }}</a>{% endfor %}</div>
+          <div class="evidence-links">{% for evidence in point.evidence %}{% if source_upload %}<a href="{% url 'view-document' source_upload.pk %}#page={{ evidence.page }}" target="_blank" rel="noopener">{% if translation %}PDF page {{ evidence.page }}{% else %}PDF 第 {{ evidence.page }} 页{% endif %}</a>{% endif %}<a href="#chunk-{{ evidence.chunk_id }}">{% if translation %}Chunk {{ evidence.chunk_id }}{% else %}片段 {{ evidence.chunk_id }}{% endif %}</a>{% endfor %}</div>
         </li>
         {% endfor %}
       </ol>
+      </div>
+      {% if translation %}
+      <div id="overview-panel-zh" class="overview-panel" data-overview-panel="zh" lang="zh-Hans" hidden>
+        <p class="overview-short">{{ translation.summary_short }}</p>
+        <p class="overview-summary">{{ translation.summary }}</p>
+        {% if translation.topics %}<div class="topic-list" aria-label="主题">{% for topic in translation.topics %}<span class="tag">{{ topic }}</span>{% endfor %}</div>{% endif %}
+        <ol class="key-point-list">
+          {% for point in translation.key_points %}
+          <li>
+            <p>{{ point.text }}</p>
+            <div class="evidence-links">{% for evidence in point.evidence %}{% if source_upload %}<a href="{% url 'view-document' source_upload.pk %}#page={{ evidence.page }}" target="_blank" rel="noopener">PDF 第 {{ evidence.page }} 页</a>{% endif %}<a href="#chunk-{{ evidence.chunk_id }}">片段 {{ evidence.chunk_id }}</a>{% endfor %}</div>
+          </li>
+          {% endfor %}
+        </ol>
+      </div>
+      {% endif %}
       <p class="analysis-provenance">{{ overview.provider }} · {{ overview.model }} · {{ overview.prompt_version }}</p>
-    {% else %}<p class="subtle">暂无 AI Overview。</p>{% endif %}
+      {% endwith %}
+    {% else %}<p class="eyebrow">Generated Analysis</p><h2 id="overview-title">AI Overview</h2><p class="subtle">暂无 AI Overview。</p>{% endif %}
   </section>
 
   <aside class="detail-section parse-facts" aria-labelledby="parse-title">
@@ -91,6 +117,23 @@
     </details>
   {% empty %}<p class="subtle">暂无解析文本。</p>{% endfor %}
 </section>
+{% if overview.payload.chinese_translation %}
+<script>
+(() => {
+  const buttons = document.querySelectorAll("[data-overview-language]");
+  const panels = document.querySelectorAll("[data-overview-panel]");
+  buttons.forEach((button) => button.addEventListener("click", () => {
+    const language = button.dataset.overviewLanguage;
+    buttons.forEach((item) => {
+      const active = item === button;
+      item.classList.toggle("active", active);
+      item.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    panels.forEach((panel) => { panel.hidden = panel.dataset.overviewPanel !== language; });
+  }));
+})();
+</script>
+{% endif %}
 {% if latest_job and not processing_state.terminal %}
 <script>
 (() => {
