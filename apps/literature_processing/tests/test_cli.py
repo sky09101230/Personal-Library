@@ -113,8 +113,25 @@ class PlabCommandTests(TestCase):
             stdout=output,
         )
 
-        enqueue.assert_called_once_with(self.upload, force=False)
+        enqueue.assert_called_once_with(self.upload, force=False, parser_name="pypdf")
         self.assertIn("job=12 status=queued created=yes", output.getvalue())
+
+    @patch("apps.literature_processing.management.commands.plab.enqueue_processing")
+    def test_literature_enqueue_accepts_explicit_mineru_parser(self, enqueue):
+        enqueue.return_value = (SimpleNamespace(pk=13, status="queued"), True)
+
+        call_command(
+            "plab",
+            "literature",
+            "enqueue",
+            "--upload-id",
+            str(self.upload.pk),
+            "--parser",
+            "mineru",
+            stdout=StringIO(),
+        )
+
+        enqueue.assert_called_once_with(self.upload, force=False, parser_name="mineru")
 
     @patch("apps.literature_processing.management.commands.plab.run_worker")
     def test_literature_worker_delegates_to_shared_loop(self, worker):

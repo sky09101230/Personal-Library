@@ -6,6 +6,8 @@ from .contracts import (
     ParsedBoundingBox,
     ParsedDocument,
     ParsedPage,
+    ParserOutput,
+    ParserRawArtifact,
 )
 from .registry import ParserUnavailable, get_parser, parse_pdf
 
@@ -17,6 +19,8 @@ __all__ = (
     "ParsedBoundingBox",
     "ParsedDocument",
     "ParsedPage",
+    "ParserOutput",
+    "ParserRawArtifact",
     "ParserUnavailable",
     "get_parser",
     "parse_pdf",

@@ -3,16 +3,25 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
+from pypdf import PdfWriter
 
 from apps.box_upload.models import CanonicalDocument, UploadedDocument
 
 from ..artifacts import ArtifactReference, PARSE_ARTIFACT_CONTENT_TYPE
 from ..jobs import backfill_processing, enqueue_processing, processing_status
 from ..models import DocumentParse, DocumentProcessingJob, LiteratureChunk
-from ..parsers import ParsedDocument, ParsedPage
+from ..parsers import (
+    STRUCTURED_PARSE_SCHEMA_VERSION,
+    BlockKind,
+    ParsedBlock,
+    ParsedDocument,
+    ParsedPage,
+    ParserOutput,
+    ParserRawArtifact,
+)
 from ..persistence import persist_parsed_document
 from ..pipeline import SourcePdfTooLarge, download_source_pdf, process_next_job
-from ..versions import PARSER_VERSION, current_versions
+from ..versions import PARSER_VERSION, current_versions, versions_for
 
 
 class ProcessingJobTests(TestCase):
@@ -87,6 +96,35 @@ class ProcessingJobTests(TestCase):
         self.assertNotEqual(current.pk, legacy.pk)
         self.assertEqual(current.pipeline_version, current_versions()["pipeline_version"])
 
+    def test_enqueue_can_opt_into_mineru_without_changing_default_versions(self):
+        job, created = enqueue_processing(self.upload, parser_name="mineru")
+
+        self.assertTrue(created)
+        self.assertEqual(job.parser_name, "mineru")
+        for field, value in versions_for("mineru").items():
+            self.assertEqual(getattr(job, field), value)
+        self.assertEqual(current_versions()["chunker_version"], "page-chars-v2")
+        self.assertEqual(versions_for("mineru")["chunker_version"], "structure-blocks-v1")
+
+    @patch.dict("os.environ", {}, clear=True)
+    def test_explicit_mineru_job_without_token_fails_without_affecting_upload(self):
+        job, _ = enqueue_processing(self.upload, parser_name="mineru")
+        writer = PdfWriter()
+        writer.add_blank_page(width=200, height=200)
+        source = BytesIO()
+        writer.write(source)
+        source.seek(0)
+
+        with self.assertLogs("apps.literature_processing.pipeline", level="ERROR"):
+            processed = process_next_job(downloader=lambda upload: source)
+
+        processed.refresh_from_db()
+        self.assertEqual(processed.pk, job.pk)
+        self.assertEqual(processed.status, DocumentProcessingJob.Status.FAILED)
+        self.assertEqual(processed.stage, DocumentProcessingJob.Stage.PARSE)
+        self.assertEqual(processed.error_code, "parse_mineru_configuration")
+        self.assertTrue(UploadedDocument.objects.filter(pk=self.upload.pk).exists())
+
     def test_worker_success_persists_parse_and_traceable_chunks(self):
         job, _ = enqueue_processing(self.upload)
         source = BytesIO(b"source")
@@ -111,6 +149,58 @@ class ProcessingJobTests(TestCase):
         self.assertEqual(chunk.uploaded_document, self.upload)
         self.assertEqual(chunk.canonical_document, self.upload.canonical_document)
         self.assertTrue(source.closed)
+
+    def test_mineru_job_persists_raw_normalized_and_structured_chunks(self):
+        job, _ = enqueue_processing(self.upload, parser_name="mineru")
+        block = ParsedBlock(
+            block_id="p0001-b0000",
+            page_number=1,
+            reading_order=0,
+            kind=BlockKind.PARAGRAPH,
+            text="Structured evidence.",
+            source={"provider": "mineru", "source_index": 0},
+        )
+        output = ParserOutput(
+            document=ParsedDocument(
+                parser_name="mineru",
+                parser_version="mineru-api-v4-vlm",
+                pages=(ParsedPage(1, block.text, (block,)),),
+                schema_version=STRUCTURED_PARSE_SCHEMA_VERSION,
+            ),
+            raw_artifact=ParserRawArtifact(
+                filename="raw.zip",
+                content=b"raw",
+                content_type="application/vnd.plab.mineru-result+zip",
+            ),
+        )
+        raw_reference = ArtifactReference(
+            storage_backend="nas_webdav",
+            path="/Literature/derived/parses/raw.zip",
+            sha256="b" * 64,
+            content_type=output.raw_artifact.content_type,
+            size=3,
+        )
+
+        processed = process_next_job(
+            downloader=lambda upload: BytesIO(b"source"),
+            parser=lambda file_obj, parser_name: output,
+            persister=lambda claimed_job, parsed: persist_parsed_document(
+                claimed_job,
+                parsed,
+                artifact_writer=self.artifact_writer,
+                raw_artifact_writer=lambda upload, raw_job, artifact: raw_reference,
+            ),
+            overview_processor=lambda document_parse: None,
+        )
+
+        processed.refresh_from_db()
+        document_parse = DocumentParse.objects.get(job=job)
+        chunk = LiteratureChunk.objects.get(document_parse=document_parse)
+        self.assertEqual(processed.status, DocumentProcessingJob.Status.SUCCEEDED)
+        self.assertEqual(document_parse.parser_name, "mineru")
+        self.assertEqual(document_parse.raw_artifact_path, raw_reference.path)
+        self.assertEqual(chunk.text, block.text)
+        self.assertEqual(chunk.source_spans[0]["block_id"], block.block_id)
 
     def test_worker_failure_keeps_upload_and_next_job_can_succeed(self):
         first_job, _ = enqueue_processing(self.upload)

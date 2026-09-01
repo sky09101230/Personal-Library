@@ -7,6 +7,7 @@ from .client import (
 )
 from .adapter import MinerUAdapter
 from .archive import MinerUArtifactError, serialize_raw_bundle
+from .parser import MinerUParser
 from .types import MinerURawResult, MinerUSegmentResult, PageRange, segment_page_ranges
 
 __all__ = (
@@ -16,6 +17,7 @@ __all__ = (
     "MinerUClient",
     "MinerUConfigurationError",
     "MinerUError",
+    "MinerUParser",
     "MinerURawResult",
     "MinerUSegmentResult",
     "MinerUTimeoutError",

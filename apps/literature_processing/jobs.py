@@ -6,14 +6,14 @@ from django.db.models import Count, Exists, OuterRef
 from apps.box_upload.models import UploadedDocument
 
 from .models import DocumentProcessingJob
-from .versions import current_versions
+from .versions import DEFAULT_PARSER_NAME, current_versions, versions_for
 
 
 logger = logging.getLogger(__name__)
 ACTIVE_STATUSES = (DocumentProcessingJob.Status.QUEUED, DocumentProcessingJob.Status.RUNNING)
 
 
-def enqueue_processing(uploaded_document, *, force=False):
+def enqueue_processing(uploaded_document, *, force=False, parser_name=DEFAULT_PARSER_NAME):
     upload_id = getattr(uploaded_document, "pk", uploaded_document)
     with transaction.atomic():
         upload = UploadedDocument.objects.select_for_update().get(pk=upload_id)
@@ -24,7 +24,7 @@ def enqueue_processing(uploaded_document, *, force=False):
         if active is not None:
             return active, False
 
-        versions = current_versions()
+        versions = versions_for(parser_name)
         if not force:
             succeeded = upload.processing_jobs.filter(
                 status=DocumentProcessingJob.Status.SUCCEEDED,
@@ -39,6 +39,7 @@ def enqueue_processing(uploaded_document, *, force=False):
                     uploaded_document=upload,
                     status=DocumentProcessingJob.Status.QUEUED,
                     stage=DocumentProcessingJob.Stage.QUEUED,
+                    parser_name=parser_name,
                     **versions,
                 )
         except IntegrityError:

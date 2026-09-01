@@ -11,7 +11,6 @@ from .models import DocumentProcessingJob
 from .overview import generate_and_persist_overview
 from .parsers import parse_pdf
 from .persistence import persist_parsed_document
-from .versions import PARSER_NAME
 
 
 logger = logging.getLogger(__name__)
@@ -63,7 +62,7 @@ def process_next_job(*, downloader=None, parser=None, persister=None, overview_p
     try:
         source = downloader(job.uploaded_document)
         _set_stage(job, DocumentProcessingJob.Stage.PARSE)
-        parsed_document = parser(source, parser_name=PARSER_NAME)
+        parsed_document = parser(source, parser_name=job.parser_name)
         _set_stage(job, DocumentProcessingJob.Stage.CHUNK)
         document_parse = persister(job, parsed_document)
         _set_stage(job, DocumentProcessingJob.Stage.OVERVIEW)

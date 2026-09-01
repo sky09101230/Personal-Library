@@ -9,7 +9,12 @@ from pypdf import PdfWriter
 
 from apps.box_upload.models import CanonicalDocument, UploadedDocument
 
-from ..artifacts import ArtifactReference, PARSE_ARTIFACT_CONTENT_TYPE, store_parse_artifact
+from ..artifacts import (
+    ArtifactReference,
+    PARSE_ARTIFACT_CONTENT_TYPE,
+    store_parse_artifact,
+    store_raw_parse_artifact,
+)
 from ..chunking import chunk_document
 from ..models import DocumentProcessingJob, LiteratureChunk
 from ..parsers import (
@@ -19,10 +24,13 @@ from ..parsers import (
     ParsedBoundingBox,
     ParsedDocument,
     ParsedPage,
+    ParserOutput,
+    ParserRawArtifact,
     ParserUnavailable,
     get_parser,
 )
 from ..parsers.pypdf_adapter import PyPdfParser
+from ..parsers.mineru.parser import MinerUParser
 from ..persistence import persist_parsed_document
 from ..structure_chunking import chunk_structured_document
 
@@ -62,8 +70,9 @@ class ParserContractTests(SimpleTestCase):
 
     def test_registry_has_explicit_adapter_boundary(self):
         self.assertIsInstance(get_parser("pypdf"), PyPdfParser)
+        self.assertIsInstance(get_parser("mineru"), MinerUParser)
         with self.assertRaises(ParserUnavailable):
-            get_parser("mineru")
+            get_parser("docling")
 
     def test_v2_contract_keeps_provider_neutral_blocks_and_bbox(self):
         block = ParsedBlock(
@@ -278,6 +287,76 @@ class ParsePersistenceTests(TestCase):
         self.assertEqual(reference.content_type, PARSE_ARTIFACT_CONTENT_TYPE)
         self.assertEqual(reference.sha256, hashlib.sha256(storage.uploaded).hexdigest())
         self.assertEqual(reference.size, len(storage.uploaded))
+
+    def test_store_raw_artifact_uses_derived_parse_namespace(self):
+        class FakeStorage:
+            name = "nas_webdav"
+
+            def upload(self, uploaded_file, namespace=""):
+                self.uploaded = b"".join(uploaded_file.chunks())
+                self.namespace = namespace
+                return "/Literature/derived/parses/raw.zip"
+
+        storage = FakeStorage()
+        raw = ParserRawArtifact(
+            filename="mineru-result.zip",
+            content=b"raw-zip",
+            content_type="application/vnd.plab.mineru-result+zip",
+        )
+
+        reference = store_raw_parse_artifact(
+            self.upload,
+            self.job,
+            raw,
+            storage_factory=lambda backend: storage,
+        )
+
+        self.assertEqual(storage.namespace, "derived/parses")
+        self.assertEqual(storage.uploaded, b"raw-zip")
+        self.assertEqual(reference.path, "/Literature/derived/parses/raw.zip")
+        self.assertEqual(reference.content_type, raw.content_type)
+
+    def test_persistence_tracks_raw_and_normalized_artifacts(self):
+        raw_reference = ArtifactReference(
+            storage_backend="nas_webdav",
+            path="/Literature/derived/parses/raw.zip",
+            sha256="3" * 64,
+            content_type="application/vnd.plab.mineru-result+zip",
+            size=321,
+        )
+        normalized_reference = ArtifactReference(
+            storage_backend="nas_webdav",
+            path="/Literature/derived/parses/normalized.json",
+            sha256="4" * 64,
+            content_type=PARSE_ARTIFACT_CONTENT_TYPE,
+            size=123,
+        )
+        output = ParserOutput(
+            document=ParsedDocument(
+                parser_name="pypdf",
+                parser_version="pypdf-test",
+                pages=(ParsedPage(1, "Traceable page text."),),
+                runtime_info={"requested_parser": "mineru", "fallback_used": True},
+            ),
+            raw_artifact=ParserRawArtifact(
+                filename="raw.zip",
+                content=b"raw",
+                content_type=raw_reference.content_type,
+            ),
+        )
+
+        document_parse = persist_parsed_document(
+            self.job,
+            output,
+            artifact_writer=lambda upload, job, parsed: normalized_reference,
+            raw_artifact_writer=lambda upload, job, raw: raw_reference,
+        )
+
+        self.assertEqual(document_parse.artifact_path, normalized_reference.path)
+        self.assertEqual(document_parse.raw_artifact_path, raw_reference.path)
+        self.assertEqual(document_parse.raw_artifact_sha256, raw_reference.sha256)
+        self.assertEqual(document_parse.raw_artifact_size, raw_reference.size)
+        self.assertTrue(document_parse.runtime_info["fallback_used"])
 
     def test_persisted_chunks_keep_full_traceability_and_reuse_same_job_result(self):
         calls = []

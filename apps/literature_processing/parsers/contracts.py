@@ -150,3 +150,22 @@ class ParsedDocument:
         if self.runtime_info:
             payload["runtime_info"] = dict(self.runtime_info)
         return payload
+
+
+@dataclass(frozen=True, slots=True)
+class ParserRawArtifact:
+    filename: str
+    content: bytes
+    content_type: str
+
+    def __post_init__(self):
+        if not self.filename.strip() or not self.content_type.strip():
+            raise ValueError("Raw parser artifact metadata must be non-empty.")
+        if not isinstance(self.content, bytes) or not self.content:
+            raise ValueError("Raw parser artifact content must be non-empty bytes.")
+
+
+@dataclass(frozen=True, slots=True)
+class ParserOutput:
+    document: ParsedDocument
+    raw_artifact: ParserRawArtifact | None = None

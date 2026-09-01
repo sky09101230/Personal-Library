@@ -26,6 +26,7 @@ class Command(BaseCommand):
         enqueue = literature_commands.add_parser("enqueue", help="Queue one uploaded primary PDF.")
         enqueue.add_argument("--upload-id", type=int, required=True)
         enqueue.add_argument("--force", action="store_true")
+        enqueue.add_argument("--parser", choices=("pypdf", "mineru"), default="pypdf")
 
         worker = literature_commands.add_parser("worker", help="Run the database-backed worker.")
         _add_worker_arguments(worker)
@@ -66,7 +67,11 @@ class Command(BaseCommand):
                 upload = UploadedDocument.objects.get(pk=options["upload_id"])
             except UploadedDocument.DoesNotExist as exc:
                 raise CommandError(f"Upload {options['upload_id']} does not exist.") from exc
-            job, created = enqueue_processing(upload, force=options["force"])
+            job, created = enqueue_processing(
+                upload,
+                force=options["force"],
+                parser_name=options["parser"],
+            )
             if job is None:
                 raise CommandError(f"Upload {upload.pk} is not an eligible primary PDF.")
             self.stdout.write(
