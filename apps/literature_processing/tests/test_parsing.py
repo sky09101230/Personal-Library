@@ -93,6 +93,25 @@ class ChunkingTests(SimpleTestCase):
             self.assertEqual(chunk.content_sha256, hashlib.sha256(chunk.text.encode("utf-8")).hexdigest())
             self.assertLessEqual(len(chunk.text), 24)
 
+    def test_trailing_whitespace_does_not_repeat_final_chunk(self):
+        document = ParsedDocument(
+            parser_name="test",
+            parser_version="test-v1",
+            pages=(
+                ParsedPage(number=1, text="Final paragraph.\n\n"),
+                ParsedPage(number=2, text=("A" * 1800) + "\n\n" + ("B" * 1800) + "\n\n"),
+            ),
+        )
+
+        chunks = chunk_document(document, max_chars=2000, overlap_chars=200)
+        page_one = [chunk for chunk in chunks if chunk.page_number == 1]
+        page_two = [chunk for chunk in chunks if chunk.page_number == 2]
+
+        self.assertEqual(len(page_one), 1)
+        self.assertEqual(page_one[0].text, "Final paragraph.")
+        self.assertLessEqual(len(page_two), 3)
+        self.assertTrue(page_two[-1].text.endswith("B"))
+
 
 class ParsePersistenceTests(TestCase):
     def setUp(self):

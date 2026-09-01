@@ -58,12 +58,13 @@ def _chunk_page(text, *, max_chars, overlap_chars):
     cursor = _skip_whitespace(text, 0)
     while cursor < len(text):
         target_end = min(cursor + max_chars, len(text))
-        end = target_end if target_end == len(text) else _find_break(text, cursor, target_end)
+        reached_page_end = target_end == len(text)
+        end = target_end if reached_page_end else _find_break(text, cursor, target_end)
         end = _trim_trailing_whitespace(text, cursor, end)
         if end <= cursor:
             end = target_end
         chunks.append((cursor, end, text[cursor:end]))
-        if end == len(text):
+        if reached_page_end:
             break
         next_cursor = max(cursor + 1, end - overlap_chars)
         cursor = _skip_whitespace(text, next_cursor)
@@ -90,4 +91,3 @@ def _trim_trailing_whitespace(text, start, end):
     while end > start and text[end - 1].isspace():
         end -= 1
     return end
-
