@@ -1,9 +1,10 @@
 from dataclasses import dataclass, field
 import json
 import os
+from http.client import HTTPException, HTTPSConnection
 from time import monotonic, sleep
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from .types import MinerURawResult, MinerUSegmentResult, segment_page_ranges
@@ -286,21 +287,26 @@ def _request_json(method, url, headers, body, timeout):
 
 
 def _put_bytes(url, content, timeout):
-    request = Request(url, data=content, method="PUT")
+    parts = urlsplit(url)
+    connection = HTTPSConnection(parts.hostname, port=parts.port, timeout=timeout)
+    target = urlunsplit(("", "", parts.path or "/", parts.query, ""))
     try:
-        with urlopen(request, timeout=timeout) as response:
-            if response.status != 200:
-                raise MinerUAPIError(
-                    "MinerU pre-signed upload failed.",
-                    retryable=response.status == 429 or response.status >= 500,
-                )
-    except HTTPError as exc:
-        raise MinerUAPIError(
-            "MinerU pre-signed upload failed.",
-            retryable=exc.code == 429 or exc.code >= 500,
-        ) from None
-    except (TimeoutError, URLError, OSError) as exc:
+        connection.request(
+            "PUT",
+            target,
+            body=content,
+            headers={"Content-Length": str(len(content))},
+        )
+        response = connection.getresponse()
+        if response.status != 200:
+            raise MinerUAPIError(
+                f"MinerU pre-signed upload failed with HTTP {response.status}.",
+                retryable=response.status == 429 or response.status >= 500,
+            )
+    except (TimeoutError, HTTPException, OSError):
         raise MinerUAPIError("MinerU upload transport failed.", retryable=True) from None
+    finally:
+        connection.close()
 
 
 def _request_bytes(url, timeout, max_bytes):

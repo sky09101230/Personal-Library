@@ -85,6 +85,12 @@ class MinerUAdapterTests(SimpleTestCase):
                     "page_idx": 2,
                 },
                 {
+                    "type": "ref_text",
+                    "text": "[3] Direct reference block",
+                    "bbox": [50, 300, 900, 315],
+                    "page_idx": 2,
+                },
+                {
                     "type": "image",
                     "img_path": "images/figure.jpg",
                     "image_caption": ["Figure 1. Experimental layout."],
@@ -113,8 +119,9 @@ class MinerUAdapterTests(SimpleTestCase):
         self.assertEqual(table.bounding_box.right, 950)
         self.assertEqual(parsed.pages[1].blocks[1].kind, BlockKind.EQUATION)
         self.assertEqual(parsed.pages[2].blocks[0].kind, BlockKind.REFERENCE)
-        self.assertEqual(parsed.pages[2].blocks[1].kind, BlockKind.FIGURE)
-        self.assertEqual(parsed.pages[2].blocks[2].kind, BlockKind.FIGURE_CAPTION)
+        self.assertEqual(parsed.pages[2].blocks[1].kind, BlockKind.REFERENCE)
+        self.assertEqual(parsed.pages[2].blocks[2].kind, BlockKind.FIGURE)
+        self.assertEqual(parsed.pages[2].blocks[3].kind, BlockKind.FIGURE_CAPTION)
         self.assertEqual(
             [block.block_id for page in parsed.pages for block in page.blocks],
             [block.block_id for page in repeated.pages for block in page.blocks],

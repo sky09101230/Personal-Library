@@ -9,6 +9,7 @@ from ..parsers.mineru.client import (
     MinerUConfig,
     MinerUConfigurationError,
     MinerUTimeoutError,
+    _put_bytes,
 )
 from ..parsers.mineru.types import segment_page_ranges
 
@@ -50,6 +51,22 @@ class MinerUConfigurationTests(SimpleTestCase):
 
 
 class MinerUClientTests(SimpleTestCase):
+    @patch("apps.literature_processing.parsers.mineru.client.HTTPSConnection")
+    def test_presigned_put_sends_only_content_length(self, connection_class):
+        connection = connection_class.return_value
+        connection.getresponse.return_value.status = 200
+
+        _put_bytes("https://upload.example/path?signature=secret", b"pdf", 30)
+
+        connection_class.assert_called_once_with("upload.example", port=None, timeout=30)
+        connection.request.assert_called_once_with(
+            "PUT",
+            "/path?signature=secret",
+            body=b"pdf",
+            headers={"Content-Length": "3"},
+        )
+        connection.close.assert_called_once_with()
+
     def test_upload_poll_and_download_use_official_batch_flow(self):
         json_calls = []
         uploads = []

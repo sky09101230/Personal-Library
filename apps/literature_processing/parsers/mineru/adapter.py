@@ -173,6 +173,13 @@ def _legacy_item(item, segment, source_index, warnings):
             bbox,
             structured_content={"items": items},
         )]
+    if source_type == "ref_text":
+        return [_draft(
+            BlockKind.REFERENCE,
+            _text(item.get("text") or item.get("content")),
+            source,
+            bbox,
+        )]
     if source_type == "code":
         body = _text(item.get("code_body"))
         captions = _string_list(item.get("code_caption"))

@@ -202,6 +202,39 @@ class ProcessingJobTests(TestCase):
         self.assertEqual(chunk.text, block.text)
         self.assertEqual(chunk.source_spans[0]["block_id"], block.block_id)
 
+    def test_mineru_runtime_fallback_uses_page_chunker_for_actual_v1_parse(self):
+        job, _ = enqueue_processing(self.upload, parser_name="mineru")
+        fallback = ParsedDocument(
+            parser_name="pypdf",
+            parser_version=PARSER_VERSION,
+            pages=(ParsedPage(1, "Fallback page evidence."),),
+            warnings=("mineru_failed_fallback_pypdf",),
+            runtime_info={
+                "requested_parser": "mineru",
+                "actual_parser": "pypdf",
+                "fallback_used": True,
+            },
+        )
+
+        processed = process_next_job(
+            downloader=lambda upload: BytesIO(b"source"),
+            parser=lambda file_obj, parser_name: fallback,
+            persister=lambda claimed_job, parsed: persist_parsed_document(
+                claimed_job,
+                parsed,
+                artifact_writer=self.artifact_writer,
+            ),
+            overview_processor=lambda document_parse: None,
+        )
+
+        processed.refresh_from_db()
+        document_parse = DocumentParse.objects.get(job=job)
+        chunk = LiteratureChunk.objects.get(document_parse=document_parse)
+        self.assertEqual(processed.status, DocumentProcessingJob.Status.SUCCEEDED)
+        self.assertEqual(document_parse.parser_name, "pypdf")
+        self.assertIn("mineru_failed_fallback_pypdf", document_parse.warnings)
+        self.assertEqual(chunk.text, "Fallback page evidence.")
+
     def test_worker_failure_keeps_upload_and_next_job_can_succeed(self):
         first_job, _ = enqueue_processing(self.upload)
         second_upload = self.create_upload("second.pdf", "2")

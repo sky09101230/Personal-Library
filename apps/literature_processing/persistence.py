@@ -7,7 +7,7 @@ from apps.box_upload.storage import get_literature_storage
 from .artifacts import store_parse_artifact, store_raw_parse_artifact
 from .chunking import chunk_document
 from .models import DocumentParse, LiteratureChunk
-from .parsers import ParserOutput
+from .parsers import ParserOutput, STRUCTURED_PARSE_SCHEMA_VERSION
 from .structure_chunking import STRUCTURE_CHUNKER_VERSION, chunk_structured_document
 
 
@@ -37,7 +37,10 @@ def persist_parsed_document(
                 parser_output.raw_artifact,
             )
         artifact = artifact_writer(job.uploaded_document, job, parsed_document)
-        if job.chunker_version == STRUCTURE_CHUNKER_VERSION:
+        if (
+            job.chunker_version == STRUCTURE_CHUNKER_VERSION
+            and parsed_document.schema_version == STRUCTURED_PARSE_SCHEMA_VERSION
+        ):
             chunks = chunk_structured_document(parsed_document)
         else:
             chunks = chunker(parsed_document)
