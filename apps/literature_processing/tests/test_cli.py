@@ -48,6 +48,22 @@ class WorkerServiceTests(SimpleTestCase):
         self.assertEqual(result.processed, 1)
         self.assertEqual(calls, [1])
 
+    def test_worker_passes_lane_and_channel_to_process_service(self):
+        calls = []
+
+        result = run_worker(
+            once=True,
+            queue_lane=DocumentProcessingJob.QueueLane.BACKFILL,
+            worker_channel="backfill-2",
+            process_func=lambda **kwargs: calls.append(kwargs) or None,
+        )
+
+        self.assertEqual(result, WorkerResult(processed=0, succeeded=0, failed=0))
+        self.assertEqual(calls, [{
+            "queue_lane": DocumentProcessingJob.QueueLane.BACKFILL,
+            "worker_channel": "backfill-2",
+        }])
+
     def test_process_existing_composes_backfill_and_worker(self):
         backfill_calls = []
         worker_calls = []

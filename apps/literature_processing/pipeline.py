@@ -2,7 +2,7 @@ import logging
 from tempfile import SpooledTemporaryFile
 
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 
 from apps.box_upload.storage import open_literature_stream
@@ -20,15 +20,18 @@ class SourcePdfTooLarge(ValueError):
     pass
 
 
-def claim_next_job():
+def claim_next_job(*, queue_lane=None, worker_channel=""):
     with transaction.atomic():
-        job = (
-            DocumentProcessingJob.objects.select_for_update()
+        lock_options = {"skip_locked": True} if connection.features.has_select_for_update_skip_locked else {}
+        jobs = (
+            DocumentProcessingJob.objects.select_for_update(**lock_options)
             .select_related("uploaded_document", "uploaded_document__canonical_document")
             .filter(status=DocumentProcessingJob.Status.QUEUED)
             .order_by("created_at", "pk")
-            .first()
         )
+        if queue_lane:
+            jobs = jobs.filter(queue_lane=queue_lane)
+        job = jobs.first()
         if job is None:
             return None
         updated = DocumentProcessingJob.objects.filter(
@@ -41,6 +44,8 @@ def claim_next_job():
             attempt_count=job.attempt_count + 1,
             error_code="",
             error_message="",
+            worker_channel=worker_channel,
+            heartbeat_at=timezone.now(),
         )
         if not updated:
             return None
@@ -49,8 +54,16 @@ def claim_next_job():
     ).get(pk=job.pk)
 
 
-def process_next_job(*, downloader=None, parser=None, persister=None, overview_processor=None):
-    job = claim_next_job()
+def process_next_job(
+    *,
+    queue_lane=None,
+    worker_channel="",
+    downloader=None,
+    parser=None,
+    persister=None,
+    overview_processor=None,
+):
+    job = claim_next_job(queue_lane=queue_lane, worker_channel=worker_channel)
     if job is None:
         return None
     downloader = downloader or download_source_pdf

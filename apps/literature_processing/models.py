@@ -4,6 +4,10 @@ from django.db import models
 
 
 class DocumentProcessingJob(models.Model):
+    class QueueLane(models.TextChoices):
+        REALTIME = "realtime", "Realtime"
+        BACKFILL = "backfill", "Backfill"
+
     class Status(models.TextChoices):
         QUEUED = "queued", "Queued"
         RUNNING = "running", "Running"
@@ -26,6 +30,12 @@ class DocumentProcessingJob(models.Model):
     )
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED, db_index=True)
     stage = models.CharField(max_length=16, choices=Stage.choices, default=Stage.QUEUED)
+    queue_lane = models.CharField(
+        max_length=16,
+        choices=QueueLane.choices,
+        default=QueueLane.BACKFILL,
+        db_index=True,
+    )
     parser_name = models.CharField(max_length=64, default="pypdf")
     pipeline_version = models.CharField(max_length=64)
     parser_version = models.CharField(max_length=64)
@@ -34,6 +44,13 @@ class DocumentProcessingJob(models.Model):
     attempt_count = models.PositiveIntegerField(default=0)
     error_code = models.CharField(max_length=64, blank=True)
     error_message = models.TextField(blank=True)
+    provider_state = models.CharField(max_length=32, blank=True)
+    provider_batch_id = models.CharField(max_length=128, blank=True)
+    progress_current = models.PositiveIntegerField(null=True, blank=True)
+    progress_total = models.PositiveIntegerField(null=True, blank=True)
+    progress_unit = models.CharField(max_length=16, blank=True)
+    worker_channel = models.CharField(max_length=32, blank=True)
+    heartbeat_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
@@ -50,6 +67,10 @@ class DocumentProcessingJob(models.Model):
         ]
         indexes = [
             models.Index(fields=("status", "created_at"), name="lp_job_queue_idx"),
+            models.Index(
+                fields=("queue_lane", "status", "created_at"),
+                name="lp_job_lane_queue_idx",
+            ),
         ]
 
     def __str__(self):

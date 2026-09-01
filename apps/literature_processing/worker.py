@@ -20,17 +20,31 @@ def run_worker(
     process_func=process_next_job,
     sleep_func=time.sleep,
     on_job=None,
+    queue_lane=None,
+    worker_channel="",
+    stop_event=None,
 ):
     processed = 0
     succeeded = 0
     failed = 0
     max_jobs = max(0, int(max_jobs))
     while True:
-        job = process_func()
+        if stop_event is not None and stop_event.is_set():
+            break
+        process_options = {}
+        if queue_lane:
+            process_options["queue_lane"] = queue_lane
+        if worker_channel:
+            process_options["worker_channel"] = worker_channel
+        job = process_func(**process_options) if process_options else process_func()
         if job is None:
             if once or (max_jobs and processed >= max_jobs):
                 break
-            sleep_func(max(0.2, poll_interval))
+            wait_seconds = max(0.2, poll_interval)
+            if stop_event is not None:
+                stop_event.wait(wait_seconds)
+            else:
+                sleep_func(wait_seconds)
             continue
         processed += 1
         if job.status == DocumentProcessingJob.Status.SUCCEEDED:
@@ -42,4 +56,3 @@ def run_worker(
         if max_jobs and processed >= max_jobs:
             break
     return WorkerResult(processed=processed, succeeded=succeeded, failed=failed)
-

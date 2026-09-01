@@ -13,7 +13,13 @@ logger = logging.getLogger(__name__)
 ACTIVE_STATUSES = (DocumentProcessingJob.Status.QUEUED, DocumentProcessingJob.Status.RUNNING)
 
 
-def enqueue_processing(uploaded_document, *, force=False, parser_name=DEFAULT_PARSER_NAME):
+def enqueue_processing(
+    uploaded_document,
+    *,
+    force=False,
+    parser_name=DEFAULT_PARSER_NAME,
+    queue_lane=DocumentProcessingJob.QueueLane.BACKFILL,
+):
     upload_id = getattr(uploaded_document, "pk", uploaded_document)
     with transaction.atomic():
         upload = UploadedDocument.objects.select_for_update().get(pk=upload_id)
@@ -39,6 +45,7 @@ def enqueue_processing(uploaded_document, *, force=False, parser_name=DEFAULT_PA
                     uploaded_document=upload,
                     status=DocumentProcessingJob.Status.QUEUED,
                     stage=DocumentProcessingJob.Stage.QUEUED,
+                    queue_lane=queue_lane,
                     parser_name=parser_name,
                     **versions,
                 )
@@ -50,16 +57,31 @@ def enqueue_processing(uploaded_document, *, force=False, parser_name=DEFAULT_PA
         return job, True
 
 
-def enqueue_processing_safely(uploaded_document):
+def enqueue_processing_safely(
+    uploaded_document,
+    *,
+    parser_name=DEFAULT_PARSER_NAME,
+    queue_lane=DocumentProcessingJob.QueueLane.BACKFILL,
+):
     try:
-        job, _ = enqueue_processing(uploaded_document)
+        job, _ = enqueue_processing(
+            uploaded_document,
+            parser_name=parser_name,
+            queue_lane=queue_lane,
+        )
     except Exception:
         logger.exception("Could not enqueue literature processing for upload %s.", uploaded_document)
         return None
     return job
 
 
-def backfill_processing(*, limit=100, force=False):
+def backfill_processing(
+    *,
+    limit=100,
+    force=False,
+    parser_name=DEFAULT_PARSER_NAME,
+    queue_lane=DocumentProcessingJob.QueueLane.BACKFILL,
+):
     limit = max(0, int(limit))
     if not limit:
         return {"created": 0, "reused": 0}
@@ -69,17 +91,24 @@ def backfill_processing(*, limit=100, force=False):
         file_role=UploadedDocument.FileRole.PRIMARY,
     ).order_by("pk")
     if not force:
+        versions = versions_for(parser_name)
         covered = DocumentProcessingJob.objects.filter(
             uploaded_document_id=OuterRef("pk"),
             status__in=(*ACTIVE_STATUSES, DocumentProcessingJob.Status.SUCCEEDED),
-            **current_versions(),
+            parser_name=parser_name,
+            **versions,
         )
         uploads = uploads.annotate(is_covered=Exists(covered)).filter(is_covered=False)
 
     created = 0
     reused = 0
     for upload in uploads[:limit]:
-        job, was_created = enqueue_processing(upload, force=force)
+        job, was_created = enqueue_processing(
+            upload,
+            force=force,
+            parser_name=parser_name,
+            queue_lane=queue_lane,
+        )
         if job is None:
             continue
         if was_created:

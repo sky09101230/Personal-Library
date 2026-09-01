@@ -20,7 +20,7 @@ from ..parsers import (
     ParserRawArtifact,
 )
 from ..persistence import persist_parsed_document
-from ..pipeline import SourcePdfTooLarge, download_source_pdf, process_next_job
+from ..pipeline import SourcePdfTooLarge, claim_next_job, download_source_pdf, process_next_job
 from ..versions import PARSER_VERSION, current_versions, versions_for
 
 
@@ -97,14 +97,45 @@ class ProcessingJobTests(TestCase):
         self.assertEqual(current.pipeline_version, current_versions()["pipeline_version"])
 
     def test_enqueue_can_opt_into_mineru_without_changing_default_versions(self):
-        job, created = enqueue_processing(self.upload, parser_name="mineru")
+        job, created = enqueue_processing(
+            self.upload,
+            parser_name="mineru",
+            queue_lane=DocumentProcessingJob.QueueLane.REALTIME,
+        )
 
         self.assertTrue(created)
         self.assertEqual(job.parser_name, "mineru")
+        self.assertEqual(job.queue_lane, DocumentProcessingJob.QueueLane.REALTIME)
         for field, value in versions_for("mineru").items():
             self.assertEqual(getattr(job, field), value)
         self.assertEqual(current_versions()["chunker_version"], "page-chars-v2")
         self.assertEqual(versions_for("mineru")["chunker_version"], "structure-blocks-v1")
+
+    def test_claim_is_lane_scoped_and_records_worker_channel(self):
+        backfill, _ = enqueue_processing(
+            self.upload,
+            parser_name="mineru",
+            queue_lane=DocumentProcessingJob.QueueLane.BACKFILL,
+        )
+        realtime_upload = self.create_upload("realtime.pdf", "8")
+        realtime, _ = enqueue_processing(
+            realtime_upload,
+            parser_name="mineru",
+            queue_lane=DocumentProcessingJob.QueueLane.REALTIME,
+        )
+
+        claimed = claim_next_job(
+            queue_lane=DocumentProcessingJob.QueueLane.REALTIME,
+            worker_channel="realtime",
+        )
+
+        backfill.refresh_from_db()
+        realtime.refresh_from_db()
+        self.assertEqual(claimed.pk, realtime.pk)
+        self.assertEqual(realtime.status, DocumentProcessingJob.Status.RUNNING)
+        self.assertEqual(realtime.worker_channel, "realtime")
+        self.assertIsNotNone(realtime.heartbeat_at)
+        self.assertEqual(backfill.status, DocumentProcessingJob.Status.QUEUED)
 
     @patch.dict("os.environ", {}, clear=True)
     def test_explicit_mineru_job_without_token_fails_without_affecting_upload(self):
