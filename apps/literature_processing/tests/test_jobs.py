@@ -19,6 +19,7 @@ from ..parsers import (
     ParserOutput,
     ParserRawArtifact,
 )
+from ..parsers.mineru.client import MinerUClient, MinerUConfig
 from ..persistence import persist_parsed_document
 from ..pipeline import SourcePdfTooLarge, claim_next_job, download_source_pdf, process_next_job
 from ..versions import PARSER_VERSION, current_versions, versions_for
@@ -180,6 +181,57 @@ class ProcessingJobTests(TestCase):
         self.assertEqual(chunk.uploaded_document, self.upload)
         self.assertEqual(chunk.canonical_document, self.upload.canonical_document)
         self.assertTrue(source.closed)
+
+    def test_worker_persists_provider_progress_and_completes_state(self):
+        job, _ = enqueue_processing(
+            self.upload,
+            parser_name="mineru",
+            queue_lane=DocumentProcessingJob.QueueLane.REALTIME,
+        )
+
+        def parser(file_obj, parser_name):
+            client = MinerUClient(
+                MinerUConfig(
+                    base_url="https://mineru.example/api/v4",
+                    token="test-token",
+                    model_version="vlm",
+                    request_timeout=30,
+                    poll_interval=0,
+                    poll_timeout=30,
+                    segment_pages=200,
+                    result_max_bytes=1024,
+                )
+            )
+            client._emit(
+                "running",
+                current=2,
+                total=3,
+                unit="pages",
+                batch_id="batch-progress",
+            )
+            return self.parsed_document("Progress evidence.")
+
+        processed = process_next_job(
+            queue_lane=DocumentProcessingJob.QueueLane.REALTIME,
+            worker_channel="realtime",
+            downloader=lambda upload: BytesIO(b"source"),
+            parser=parser,
+            persister=lambda claimed_job, parsed: persist_parsed_document(
+                claimed_job,
+                parsed,
+                artifact_writer=self.artifact_writer,
+            ),
+            overview_processor=lambda document_parse: None,
+        )
+
+        processed.refresh_from_db()
+        self.assertEqual(processed.pk, job.pk)
+        self.assertEqual(processed.provider_state, "complete")
+        self.assertEqual(processed.provider_batch_id, "batch-progress")
+        self.assertEqual((processed.progress_current, processed.progress_total), (2, 3))
+        self.assertEqual(processed.progress_unit, "pages")
+        self.assertEqual(processed.worker_channel, "realtime")
+        self.assertIsNotNone(processed.heartbeat_at)
 
     def test_mineru_job_persists_raw_normalized_and_structured_chunks(self):
         job, _ = enqueue_processing(self.upload, parser_name="mineru")

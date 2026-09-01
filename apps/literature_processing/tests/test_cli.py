@@ -13,6 +13,7 @@ from ..models import DocumentProcessingJob
 from ..operations import ProcessExistingResult, process_existing
 from ..storage_layout import LayoutAction, LayoutMigrationResult
 from ..worker import WorkerResult, run_worker
+from ..parsers.mineru.client import MinerUConfig
 
 
 class WorkerServiceTests(SimpleTestCase):
@@ -63,6 +64,18 @@ class WorkerServiceTests(SimpleTestCase):
             "queue_lane": DocumentProcessingJob.QueueLane.BACKFILL,
             "worker_channel": "backfill-2",
         }])
+
+    @patch.dict("os.environ", {}, clear=True)
+    def test_worker_scopes_mineru_token_without_mutating_environment(self):
+        tokens = []
+
+        run_worker(
+            once=True,
+            mineru_api_token="thread-token",
+            process_func=lambda: tokens.append(MinerUConfig.from_environment().token) or None,
+        )
+
+        self.assertEqual(tokens, ["thread-token"])
 
     def test_process_existing_composes_backfill_and_worker(self):
         backfill_calls = []

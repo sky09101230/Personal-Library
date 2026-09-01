@@ -1,4 +1,6 @@
 from dataclasses import dataclass, field
+from contextlib import contextmanager
+from contextvars import ContextVar
 import json
 import os
 from http.client import HTTPException, HTTPSConnection
@@ -12,6 +14,8 @@ from .types import MinerURawResult, MinerUSegmentResult, segment_page_ranges
 
 DEFAULT_BASE_URL = "https://mineru.net/api/v4"
 _WAITING_STATES = {"waiting-file", "pending", "running", "converting"}
+_api_token_context = ContextVar("mineru_api_token", default="")
+_progress_callback_context = ContextVar("mineru_progress_callback", default=None)
 
 
 class MinerUError(RuntimeError):
@@ -47,7 +51,7 @@ class MinerUConfig:
 
     @classmethod
     def from_environment(cls):
-        token = os.environ.get("MINERU_API_TOKEN", "").strip()
+        token = (_api_token_context.get() or os.environ.get("MINERU_API_TOKEN", "")).strip()
         if not token:
             raise MinerUConfigurationError("MINERU_API_TOKEN is not configured.")
         base_url = os.environ.get("MINERU_API_BASE_URL", DEFAULT_BASE_URL).strip().rstrip("/")
@@ -89,6 +93,7 @@ class MinerUClient:
         request_bytes=None,
         sleep_func=sleep,
         monotonic_func=monotonic,
+        progress_callback=None,
     ):
         self.config = config or MinerUConfig.from_environment()
         self._request_json = request_json or _request_json
@@ -96,6 +101,7 @@ class MinerUClient:
         self._request_bytes = request_bytes or _request_bytes
         self._sleep = sleep_func
         self._monotonic = monotonic_func
+        self._progress_callback = progress_callback or _progress_callback_context.get()
 
     def parse_pdf(self, file_obj, *, page_count, data_id):
         started_at = self._monotonic()
@@ -104,6 +110,7 @@ class MinerUClient:
             segment_pages=self.config.segment_pages,
         )
         source_bytes = _read_source(file_obj)
+        self._emit("allocating", current=0, total=int(page_count), unit="pages")
         file_specs = [
             {
                 "name": f"plab-{data_id}-part-{index + 1:03d}.pdf",
@@ -127,7 +134,14 @@ class MinerUClient:
         upload_urls = allocation.get("file_urls")
         if not isinstance(upload_urls, list) or len(upload_urls) != len(file_specs):
             raise MinerUAPIError("MinerU returned an invalid upload URL list.")
-        for upload_url in upload_urls:
+        self._emit(
+            "uploading",
+            current=0,
+            total=len(upload_urls),
+            unit="segments",
+            batch_id=batch_id,
+        )
+        for upload_index, upload_url in enumerate(upload_urls, start=1):
             self._retry(
                 lambda: self._put_bytes(
                     _require_https_url(upload_url, "upload URL"),
@@ -135,11 +149,26 @@ class MinerUClient:
                     self.config.request_timeout,
                 )
             )
+            self._emit(
+                "uploading",
+                current=upload_index,
+                total=len(upload_urls),
+                unit="segments",
+                batch_id=batch_id,
+            )
 
-        results = self._poll_batch(batch_id, file_specs)
+        self._emit("pending", current=0, total=int(page_count), unit="pages", batch_id=batch_id)
+        results = self._poll_batch(batch_id, file_specs, page_ranges)
         segments = []
         total_result_bytes = 0
         for index, (page_range, file_spec) in enumerate(zip(page_ranges, file_specs, strict=True)):
+            self._emit(
+                "downloading",
+                current=index,
+                total=len(file_specs),
+                unit="segments",
+                batch_id=batch_id,
+            )
             item = results[file_spec["data_id"]]
             result_url = _require_https_url(item.get("full_zip_url"), "result URL")
             archive_bytes = self._retry(
@@ -161,6 +190,14 @@ class MinerUClient:
                     result_url=result_url,
                 )
             )
+        self._emit(
+            "downloading",
+            current=len(file_specs),
+            total=len(file_specs),
+            unit="segments",
+            batch_id=batch_id,
+        )
+        self._emit("normalizing", batch_id=batch_id)
         return MinerURawResult(
             batch_id=batch_id,
             model_version=self.config.model_version,
@@ -175,7 +212,7 @@ class MinerUClient:
             },
         )
 
-    def _poll_batch(self, batch_id, file_specs):
+    def _poll_batch(self, batch_id, file_specs, page_ranges):
         deadline = self._monotonic() + self.config.poll_timeout
         expected_ids = {item["data_id"] for item in file_specs}
         while True:
@@ -193,6 +230,7 @@ class MinerUClient:
                 for item in items
                 if isinstance(item, dict) and item.get("data_id") in expected_ids
             }
+            self._emit_poll_progress(batch_id, file_specs, page_ranges, by_id)
             failed = next((item for item in by_id.values() if item.get("state") == "failed"), None)
             if failed is not None:
                 raise MinerUAPIError("MinerU failed to parse one document segment.")
@@ -208,6 +246,49 @@ class MinerUClient:
             if self._monotonic() >= deadline:
                 raise MinerUTimeoutError("MinerU batch polling timed out.")
             self._sleep(self.config.poll_interval)
+
+    def _emit_poll_progress(self, batch_id, file_specs, page_ranges, by_id):
+        current = 0
+        states = set()
+        for file_spec, page_range in zip(file_specs, page_ranges, strict=True):
+            page_total = page_range.end - page_range.start + 1
+            item = by_id.get(file_spec["data_id"], {})
+            state = item.get("state") or "pending"
+            states.add(state)
+            if state == "done":
+                current += page_total
+                continue
+            progress = item.get("extract_progress")
+            if isinstance(progress, dict):
+                extracted = progress.get("extracted_pages", 0)
+                if isinstance(extracted, int) and not isinstance(extracted, bool):
+                    current += min(max(0, extracted), page_total)
+        if states and states <= {"done"}:
+            state = "running"
+        elif "running" in states:
+            state = "running"
+        elif "converting" in states:
+            state = "converting"
+        else:
+            state = "pending"
+        self._emit(
+            state,
+            current=current,
+            total=sum(item.end - item.start + 1 for item in page_ranges),
+            unit="pages",
+            batch_id=batch_id,
+        )
+
+    def _emit(self, state, *, current=None, total=None, unit="", batch_id=""):
+        if self._progress_callback is None:
+            return
+        self._progress_callback({
+            "state": state,
+            "current": current,
+            "total": total,
+            "unit": unit,
+            "batch_id": batch_id,
+        })
 
     def _api_json(self, method, url, *, body=None):
         payload = self._retry(
@@ -324,3 +405,21 @@ def _request_bytes(url, timeout, max_bytes):
     if len(content) > max_bytes:
         raise MinerUAPIError("MinerU result archive exceeds the configured size limit.")
     return content
+
+
+@contextmanager
+def use_mineru_api_token(token):
+    marker = _api_token_context.set((token or "").strip())
+    try:
+        yield
+    finally:
+        _api_token_context.reset(marker)
+
+
+@contextmanager
+def use_mineru_progress_callback(callback):
+    marker = _progress_callback_context.set(callback)
+    try:
+        yield
+    finally:
+        _progress_callback_context.reset(marker)

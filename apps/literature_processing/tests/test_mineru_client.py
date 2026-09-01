@@ -10,6 +10,7 @@ from ..parsers.mineru.client import (
     MinerUConfigurationError,
     MinerUTimeoutError,
     _put_bytes,
+    use_mineru_api_token,
 )
 from ..parsers.mineru.types import segment_page_ranges
 
@@ -45,6 +46,14 @@ class MinerUConfigurationTests(SimpleTestCase):
     def test_config_repr_never_contains_token(self):
         self.assertNotIn("test-token", repr(config()))
 
+    @patch.dict("os.environ", {"MINERU_API_TOKEN": "generic-token"}, clear=True)
+    def test_worker_token_context_overrides_generic_token(self):
+        with use_mineru_api_token("channel-token"):
+            resolved = MinerUConfig.from_environment()
+
+        self.assertEqual(resolved.token, "channel-token")
+        self.assertEqual(MinerUConfig.from_environment().token, "generic-token")
+
     @patch.dict("os.environ", {"MINERU_API_TOKEN": "test-token"}, clear=True)
     def test_default_result_limit_is_800_mib(self):
         self.assertEqual(MinerUConfig.from_environment().result_max_bytes, 800 * 1024 * 1024)
@@ -71,6 +80,7 @@ class MinerUClientTests(SimpleTestCase):
         json_calls = []
         uploads = []
         downloads = []
+        progress_events = []
         poll_count = 0
 
         def request_json(method, url, headers, body, timeout):
@@ -112,6 +122,7 @@ class MinerUClientTests(SimpleTestCase):
             or b"zip",
             sleep_func=lambda seconds: None,
             monotonic_func=iter(range(20)).__next__,
+            progress_callback=progress_events.append,
         )
 
         result = client.parse_pdf(BytesIO(b"%PDF-source"), page_count=3, data_id="run-1")
@@ -133,6 +144,16 @@ class MinerUClientTests(SimpleTestCase):
         self.assertEqual(len(downloads), 2)
         self.assertEqual(result.batch_id, "batch-1")
         self.assertEqual([item.page_range.expression for item in result.segments], ["1-2", "3-3"])
+        self.assertEqual(progress_events[0], {
+            "state": "allocating",
+            "current": 0,
+            "total": 3,
+            "unit": "pages",
+            "batch_id": "",
+        })
+        self.assertIn("uploading", [event["state"] for event in progress_events])
+        self.assertIn("running", [event["state"] for event in progress_events])
+        self.assertEqual(progress_events[-1]["state"], "normalizing")
 
     def test_failed_segment_is_normalized_without_provider_detail(self):
         def request_json(method, url, headers, body, timeout):

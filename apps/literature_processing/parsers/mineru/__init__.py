@@ -4,6 +4,8 @@ from .client import (
     MinerUConfigurationError,
     MinerUError,
     MinerUTimeoutError,
+    use_mineru_api_token,
+    use_mineru_progress_callback,
 )
 from .adapter import MinerUAdapter
 from .archive import MinerUArtifactError, serialize_raw_bundle
@@ -24,4 +26,6 @@ __all__ = (
     "PageRange",
     "segment_page_ranges",
     "serialize_raw_bundle",
+    "use_mineru_api_token",
+    "use_mineru_progress_callback",
 )
