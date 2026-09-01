@@ -44,6 +44,10 @@ class MinerUConfigurationTests(SimpleTestCase):
     def test_config_repr_never_contains_token(self):
         self.assertNotIn("test-token", repr(config()))
 
+    @patch.dict("os.environ", {"MINERU_API_TOKEN": "test-token"}, clear=True)
+    def test_default_result_limit_is_800_mib(self):
+        self.assertEqual(MinerUConfig.from_environment().result_max_bytes, 800 * 1024 * 1024)
+
 
 class MinerUClientTests(SimpleTestCase):
     def test_upload_poll_and_download_use_official_batch_flow(self):

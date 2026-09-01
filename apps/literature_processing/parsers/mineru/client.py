@@ -67,7 +67,7 @@ class MinerUConfig:
                 segment_pages=int(os.environ.get("MINERU_SEGMENT_PAGES", "200")),
                 result_max_bytes=max(
                     1,
-                    int(os.environ.get("MINERU_RESULT_MAX_BYTES", str(512 * 1024 * 1024))),
+                    int(os.environ.get("MINERU_RESULT_MAX_BYTES", str(800 * 1024 * 1024))),
                 ),
             )
         except ValueError as exc:

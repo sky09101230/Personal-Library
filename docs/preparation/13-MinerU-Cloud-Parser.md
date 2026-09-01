@@ -20,7 +20,7 @@ MINERU_REQUEST_TIMEOUT=120
 MINERU_POLL_INTERVAL=5
 MINERU_POLL_TIMEOUT=3600
 MINERU_SEGMENT_PAGES=200
-MINERU_RESULT_MAX_BYTES=536870912
+MINERU_RESULT_MAX_BYTES=838860800
 ```
 
 token 在 `https://mineru.net/apiManage` 登录后自行创建。缺 token 时 Django 启动、PyPDF processing 和全部 fake 测试必须正常；只有显式调用 MinerU parser 才返回 `mineru_configuration`。
@@ -46,4 +46,3 @@ python manage.py plab literature worker --once --max-jobs <count>
 ```
 
 先覆盖 3 页公式文献、中文综述、双栏论文、表格/图像论文和中等长 tutorial。585 页专著只在短样本 API 合同与 quota 验证后运行 segmented smoke；不 backfill 其余历史文献。
-
