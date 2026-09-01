@@ -91,6 +91,7 @@ class Command(BaseCommand):
                 force=options["force"],
                 parser_name=options["parser"],
                 queue_lane=DocumentProcessingJob.QueueLane.BACKFILL,
+                on_progress=self._report_backfill_progress,
             )
             self.stdout.write(self.style.SUCCESS(_queue_summary(result)))
             return
@@ -206,6 +207,17 @@ class Command(BaseCommand):
     def _report_job(self, job):
         self.stdout.write(
             f"job={job.pk} parser={job.parser_name} status={job.status} stage={job.stage}"
+        )
+
+    def _report_backfill_progress(self, *, current, total, created, reused):
+        if total <= 0:
+            return
+        width = 24
+        filled = min(width, current * width // total)
+        bar = "#" * filled + "-" * (width - filled)
+        self.stdout.write(
+            f"\rQueueing [{bar}] {current}/{total} created={created} reused={reused}",
+            ending="\n" if current == total else "",
         )
 
 

@@ -185,7 +185,13 @@ class PlabCommandTests(TestCase):
 
     @patch("apps.literature_processing.management.commands.plab.backfill_processing")
     def test_literature_backfill_delegates_to_service(self, backfill):
-        backfill.return_value = {"created": 3, "reused": 2}
+        def report_progress(**kwargs):
+            kwargs["on_progress"](current=0, total=5, created=0, reused=0)
+            kwargs["on_progress"](current=3, total=5, created=2, reused=1)
+            kwargs["on_progress"](current=5, total=5, created=3, reused=2)
+            return {"created": 3, "reused": 2}
+
+        backfill.side_effect = report_progress
         output = StringIO()
 
         call_command(
@@ -203,7 +209,10 @@ class PlabCommandTests(TestCase):
             force=True,
             parser_name="mineru",
             queue_lane=DocumentProcessingJob.QueueLane.BACKFILL,
+            on_progress=ANY,
         )
+        self.assertIn("3/5 created=2 reused=1", output.getvalue())
+        self.assertIn("[########################] 5/5", output.getvalue())
         self.assertIn("Queued 3; reused/skipped 2", output.getvalue())
 
     @patch("apps.literature_processing.management.commands.plab.enqueue_processing")

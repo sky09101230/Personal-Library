@@ -31,6 +31,8 @@ python manage.py plab literature worker --lane backfill --token-slot 1 --once
 python manage.py plab literature backfill --parser mineru --limit 100
 ```
 
+该命令在终端单行显示入队进度、created 和 reused 数量；进度条完成只代表 enqueue 完成，不代表 MinerU 与 Overview 处理完成。实际处理进度继续由 worker 日志和文献详情页显示。
+
 ## 验收条件
 
 1. 新主 PDF 在上传事务提交后自动创建 `mineru + realtime` job；callback 只写数据库且失败不影响 upload。

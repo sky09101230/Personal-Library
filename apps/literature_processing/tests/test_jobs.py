@@ -369,6 +369,22 @@ class ProcessingJobTests(TestCase):
         self.assertTrue(DocumentProcessingJob.objects.filter(uploaded_document=second_upload).exists())
         self.assertEqual(DocumentProcessingJob.objects.count(), 2)
 
+    def test_backfill_reports_enqueue_progress(self):
+        self.create_upload("second.pdf", "2")
+        progress = []
+
+        result = backfill_processing(
+            limit=2,
+            on_progress=lambda **state: progress.append(state),
+        )
+
+        self.assertEqual(result, {"created": 2, "reused": 0})
+        self.assertEqual(progress, [
+            {"current": 0, "total": 2, "created": 0, "reused": 0},
+            {"current": 1, "total": 2, "created": 1, "reused": 0},
+            {"current": 2, "total": 2, "created": 2, "reused": 0},
+        ])
+
     def test_new_primary_upload_enqueues_after_commit(self):
         with self.captureOnCommitCallbacks(execute=True):
             upload = self.create_upload("signal.pdf", "4")

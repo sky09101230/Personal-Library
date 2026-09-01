@@ -81,6 +81,7 @@ def backfill_processing(
     force=False,
     parser_name=DEFAULT_PARSER_NAME,
     queue_lane=DocumentProcessingJob.QueueLane.BACKFILL,
+    on_progress=None,
 ):
     limit = max(0, int(limit))
     if not limit:
@@ -100,21 +101,26 @@ def backfill_processing(
         )
         uploads = uploads.annotate(is_covered=Exists(covered)).filter(is_covered=False)
 
+    selected_uploads = uploads[:limit]
+    total = selected_uploads.count()
     created = 0
     reused = 0
-    for upload in uploads[:limit]:
+    if on_progress is not None:
+        on_progress(current=0, total=total, created=created, reused=reused)
+    for current, upload in enumerate(selected_uploads, start=1):
         job, was_created = enqueue_processing(
             upload,
             force=force,
             parser_name=parser_name,
             queue_lane=queue_lane,
         )
-        if job is None:
-            continue
-        if was_created:
-            created += 1
-        else:
-            reused += 1
+        if job is not None:
+            if was_created:
+                created += 1
+            else:
+                reused += 1
+        if on_progress is not None:
+            on_progress(current=current, total=total, created=created, reused=reused)
     return {"created": created, "reused": reused}
 
 
