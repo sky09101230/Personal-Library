@@ -375,7 +375,9 @@ class ProcessingJobTests(TestCase):
 
         job = DocumentProcessingJob.objects.get(uploaded_document=upload)
         self.assertEqual(job.status, DocumentProcessingJob.Status.QUEUED)
-        for field, value in current_versions().items():
+        self.assertEqual(job.parser_name, "mineru")
+        self.assertEqual(job.queue_lane, DocumentProcessingJob.QueueLane.REALTIME)
+        for field, value in versions_for("mineru").items():
             self.assertEqual(getattr(job, field), value)
 
     def test_enqueue_failure_after_commit_does_not_fail_upload(self):

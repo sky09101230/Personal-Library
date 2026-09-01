@@ -14,6 +14,12 @@ from ..operations import ProcessExistingResult, process_existing
 from ..storage_layout import LayoutAction, LayoutMigrationResult
 from ..worker import WorkerResult, run_worker
 from ..parsers.mineru.client import MinerUConfig
+from ..worker_pool import (
+    WorkerChannel,
+    WorkerPoolConfigurationError,
+    load_worker_channels,
+    run_worker_pool,
+)
 
 
 class WorkerServiceTests(SimpleTestCase):
@@ -92,9 +98,76 @@ class WorkerServiceTests(SimpleTestCase):
 
         self.assertEqual(result.created, 2)
         self.assertEqual(result.reused, 1)
-        self.assertEqual(backfill_calls, [{"limit": 7, "force": True}])
-        self.assertEqual(worker_calls[0]["once"], True)
-        self.assertEqual(worker_calls[0]["max_jobs"], 3)
+        self.assertEqual(backfill_calls, [{
+            "limit": 7,
+            "force": True,
+            "parser_name": "pypdf",
+            "queue_lane": DocumentProcessingJob.QueueLane.BACKFILL,
+        }])
+        self.assertEqual(worker_calls, [{
+            "once": True,
+            "max_jobs": 3,
+            "on_job": None,
+            "queue_lane": DocumentProcessingJob.QueueLane.BACKFILL,
+        }])
+
+    def test_pool_requires_five_distinct_tokens(self):
+        with self.assertRaises(WorkerPoolConfigurationError):
+            load_worker_channels({"MINERU_API_TOKEN": "realtime"})
+        with self.assertRaises(WorkerPoolConfigurationError):
+            load_worker_channels({
+                "MINERU_API_TOKEN": "same",
+                **{f"MINERU_BACKFILL_API_TOKEN_{index}": "same" for index in range(1, 5)},
+            })
+
+    def test_pool_builds_one_realtime_and_four_backfill_channels(self):
+        channels = load_worker_channels({
+            "MINERU_API_TOKEN": "realtime-token",
+            **{
+                f"MINERU_BACKFILL_API_TOKEN_{index}": f"backfill-token-{index}"
+                for index in range(1, 5)
+            },
+        })
+
+        self.assertEqual([channel.name for channel in channels], [
+            "realtime",
+            "backfill-1",
+            "backfill-2",
+            "backfill-3",
+            "backfill-4",
+        ])
+        self.assertEqual(channels[0].queue_lane, DocumentProcessingJob.QueueLane.REALTIME)
+        self.assertTrue(all(
+            channel.queue_lane == DocumentProcessingJob.QueueLane.BACKFILL
+            for channel in channels[1:]
+        ))
+        self.assertNotIn("realtime-token", repr(channels[0]))
+
+    def test_pool_runs_all_five_channel_workers(self):
+        calls = []
+        channels = (
+            WorkerChannel("realtime", DocumentProcessingJob.QueueLane.REALTIME, "token-0"),
+            *(
+                WorkerChannel(
+                    f"backfill-{index}",
+                    DocumentProcessingJob.QueueLane.BACKFILL,
+                    f"token-{index}",
+                )
+                for index in range(1, 5)
+            ),
+        )
+
+        results = run_worker_pool(
+            channels=channels,
+            require_postgresql=False,
+            worker_func=lambda **kwargs: calls.append(kwargs)
+            or WorkerResult(processed=0, succeeded=0, failed=0),
+        )
+
+        self.assertEqual(set(results), {channel.name for channel in channels})
+        self.assertEqual(len(calls), 5)
+        self.assertEqual({call["worker_channel"] for call in calls}, set(results))
+        self.assertEqual(len({call["mineru_api_token"] for call in calls}), 5)
 
 
 class PlabCommandTests(TestCase):
@@ -125,7 +198,12 @@ class PlabCommandTests(TestCase):
             stdout=output,
         )
 
-        backfill.assert_called_once_with(limit=7, force=True)
+        backfill.assert_called_once_with(
+            limit=7,
+            force=True,
+            parser_name="mineru",
+            queue_lane=DocumentProcessingJob.QueueLane.BACKFILL,
+        )
         self.assertIn("Queued 3; reused/skipped 2", output.getvalue())
 
     @patch("apps.literature_processing.management.commands.plab.enqueue_processing")
@@ -142,7 +220,12 @@ class PlabCommandTests(TestCase):
             stdout=output,
         )
 
-        enqueue.assert_called_once_with(self.upload, force=False, parser_name="pypdf")
+        enqueue.assert_called_once_with(
+            self.upload,
+            force=False,
+            parser_name="pypdf",
+            queue_lane=DocumentProcessingJob.QueueLane.BACKFILL,
+        )
         self.assertIn("job=12 parser=pypdf status=queued created=yes", output.getvalue())
 
     @patch("apps.literature_processing.management.commands.plab.enqueue_processing")
@@ -160,7 +243,12 @@ class PlabCommandTests(TestCase):
             stdout=StringIO(),
         )
 
-        enqueue.assert_called_once_with(self.upload, force=False, parser_name="mineru")
+        enqueue.assert_called_once_with(
+            self.upload,
+            force=False,
+            parser_name="mineru",
+            queue_lane=DocumentProcessingJob.QueueLane.BACKFILL,
+        )
 
     @patch("apps.literature_processing.management.commands.plab.run_worker")
     def test_literature_worker_delegates_to_shared_loop(self, worker):
@@ -184,6 +272,9 @@ class PlabCommandTests(TestCase):
             max_jobs=4,
             poll_interval=0.5,
             on_job=ANY,
+            queue_lane=None,
+            worker_channel="",
+            mineru_api_token=None,
         )
         self.assertIn("Processed 2; succeeded 1; failed 1", output.getvalue())
 
@@ -225,8 +316,25 @@ class PlabCommandTests(TestCase):
             force=False,
             max_jobs=5,
             on_job=ANY,
+            parser_name="pypdf",
+            queue_lane=DocumentProcessingJob.QueueLane.BACKFILL,
         )
         self.assertIn("Queued 2; reused/skipped 1", output.getvalue())
+
+    @patch("apps.literature_processing.management.commands.plab.run_worker_pool")
+    def test_worker_pool_delegates_to_shared_pool(self, pool):
+        pool.return_value = {}
+
+        call_command(
+            "plab",
+            "literature",
+            "worker-pool",
+            "--poll-interval",
+            "0.5",
+            stdout=StringIO(),
+        )
+
+        pool.assert_called_once_with(poll_interval=0.5, on_job=ANY)
 
     @patch("apps.literature_processing.management.commands.plab.migrate_literature_layout")
     def test_storage_dry_run_delegates_and_reports_actions(self, migrate):
