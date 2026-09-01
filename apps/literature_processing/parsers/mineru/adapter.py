@@ -68,6 +68,8 @@ class MinerUAdapter:
             "model_version": raw_result.model_version,
             "structured_sources": [segment.source_format for segment in segments],
         }
+        if any("\ufffd" in block.text for page in pages for block in page.blocks):
+            warnings.append("mineru_replacement_character")
         return ParsedDocument(
             parser_name=self.name,
             parser_version=f"mineru-api-v4-{raw_result.model_version}",

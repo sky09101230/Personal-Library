@@ -208,3 +208,18 @@ class MinerUAdapterTests(SimpleTestCase):
 
         with self.assertRaises(MinerUArtifactError):
             MinerUAdapter().convert(result)
+
+    def test_replacement_characters_are_preserved_and_observable(self):
+        result = raw_result((
+            segment(
+                0,
+                1,
+                1,
+                [{"type": "text", "text": "distance 0.67\ufffd", "page_idx": 0}],
+            ),
+        ), page_count=1)
+
+        parsed = MinerUAdapter().convert(result)
+
+        self.assertEqual(parsed.pages[0].blocks[0].text, "distance 0.67\ufffd")
+        self.assertIn("mineru_replacement_character", parsed.warnings)
