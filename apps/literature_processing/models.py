@@ -26,6 +26,7 @@ class DocumentProcessingJob(models.Model):
     )
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED, db_index=True)
     stage = models.CharField(max_length=16, choices=Stage.choices, default=Stage.QUEUED)
+    parser_name = models.CharField(max_length=64, default="pypdf")
     pipeline_version = models.CharField(max_length=64)
     parser_version = models.CharField(max_length=64)
     chunker_version = models.CharField(max_length=64)
@@ -71,6 +72,12 @@ class DocumentParse(models.Model):
     artifact_content_type = models.CharField(max_length=255, default="application/json")
     artifact_size = models.PositiveBigIntegerField()
     warnings = models.JSONField(default=list, blank=True)
+    runtime_info = models.JSONField(default=dict, blank=True)
+    raw_artifact_storage_backend = models.CharField(max_length=32, blank=True)
+    raw_artifact_path = models.CharField(max_length=1000, blank=True)
+    raw_artifact_sha256 = models.CharField(max_length=64, blank=True)
+    raw_artifact_content_type = models.CharField(max_length=255, blank=True)
+    raw_artifact_size = models.PositiveBigIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -97,11 +104,14 @@ class LiteratureChunk(models.Model):
     chunk_key = models.CharField(max_length=128)
     sequence = models.PositiveIntegerField()
     page_number = models.PositiveIntegerField()
+    end_page_number = models.PositiveIntegerField(null=True, blank=True)
     page_sequence = models.PositiveIntegerField()
     start_offset = models.PositiveIntegerField()
     end_offset = models.PositiveIntegerField()
     text = models.TextField()
     content_sha256 = models.CharField(max_length=64)
+    section_path = models.JSONField(default=list, blank=True)
+    source_spans = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -126,6 +136,13 @@ class LiteratureChunk(models.Model):
             models.CheckConstraint(
                 condition=models.Q(end_offset__gt=models.F("start_offset")),
                 name="lp_chunk_offsets_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(end_page_number__isnull=True)
+                    | models.Q(end_page_number__gte=models.F("page_number"))
+                ),
+                name="lp_chunk_page_range_valid",
             ),
         ]
         indexes = [
