@@ -28,7 +28,7 @@ python manage.py plab literature worker --lane backfill --token-slot 1 --once
 历史文献只 enqueue，不在 Web 请求内处理：
 
 ```powershell
-python manage.py plab literature backfill --parser mineru --lane backfill --limit 100
+python manage.py plab literature backfill --parser mineru --limit 100
 ```
 
 ## 验收条件
@@ -40,4 +40,3 @@ python manage.py plab literature backfill --parser mineru --lane backfill --limi
 5. 登录用户可以 polling 文献状态 JSON；未登录拒绝，终态停止 polling，页面无需刷新即可显示成功/失败。
 6. 旧 CLI 保持兼容；backfill/process-existing 可显式选择 MinerU/backfill lane。
 7. 上传、job 失败、重复 enqueue、并发 claim、pool token 配置、status endpoint、SQLite 和 PostgreSQL migration 均有覆盖。
-
