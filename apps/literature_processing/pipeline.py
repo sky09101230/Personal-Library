@@ -46,6 +46,10 @@ def claim_next_job(*, queue_lane=None, worker_channel=""):
             error_code="",
             error_message="",
             provider_state="download",
+            provider_batch_id="",
+            progress_current=None,
+            progress_total=None,
+            progress_unit="",
             worker_channel=worker_channel,
             heartbeat_at=timezone.now(),
         )

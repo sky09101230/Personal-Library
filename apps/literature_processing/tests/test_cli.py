@@ -278,18 +278,55 @@ class PlabCommandTests(TestCase):
         )
         self.assertIn("Processed 2; succeeded 1; failed 1", output.getvalue())
 
+    @patch.dict(
+        "os.environ",
+        {"MINERU_BACKFILL_API_TOKEN_2": "backfill-token"},
+        clear=False,
+    )
+    @patch("apps.literature_processing.management.commands.plab.run_worker")
+    def test_literature_worker_resolves_backfill_token_slot(self, worker):
+        worker.return_value = WorkerResult(processed=0, succeeded=0, failed=0)
+
+        call_command(
+            "plab",
+            "literature",
+            "worker",
+            "--lane",
+            "backfill",
+            "--token-slot",
+            "2",
+            "--once",
+            stdout=StringIO(),
+        )
+
+        worker.assert_called_once_with(
+            once=True,
+            max_jobs=0,
+            poll_interval=2.0,
+            on_job=ANY,
+            queue_lane="backfill",
+            worker_channel="backfill-2",
+            mineru_api_token="backfill-token",
+        )
+
     @patch("apps.literature_processing.management.commands.plab.processing_status")
     def test_literature_status_delegates_to_service(self, status):
         status.return_value = {
             "uploads": 10,
             "uncovered": 2,
             "jobs": {"queued": 1, "running": 2, "succeeded": 3, "failed": 4},
+            "lanes": {
+                "realtime": {"queued": 1, "running": 0},
+                "backfill": {"queued": 0, "running": 2},
+            },
         }
         output = StringIO()
 
         call_command("plab", "literature", "status", stdout=output)
 
         self.assertIn("uploads=10 uncovered=2 queued=1 running=2 succeeded=3 failed=4", output.getvalue())
+        self.assertIn("realtime_queued=1 realtime_running=0", output.getvalue())
+        self.assertIn("backfill_queued=0 backfill_running=2", output.getvalue())
 
     @patch("apps.literature_processing.management.commands.plab.process_existing")
     def test_process_existing_delegates_to_composed_service(self, process):

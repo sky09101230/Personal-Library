@@ -23,12 +23,15 @@ class DocumentProcessingJobAdmin(ReadOnlyDerivedDataAdmin):
         "id",
         "uploaded_document",
         "parser_name",
+        "queue_lane",
         "status",
         "stage",
+        "provider_state",
+        "worker_channel",
         "pipeline_version",
         "created_at",
     )
-    list_filter = ("parser_name", "status", "stage", "pipeline_version")
+    list_filter = ("parser_name", "queue_lane", "status", "stage", "pipeline_version")
     search_fields = ("run_id", "uploaded_document__original_name", "error_code")
 
 

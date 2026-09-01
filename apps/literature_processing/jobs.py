@@ -132,6 +132,16 @@ def processing_status():
         row["status"]: row["count"]
         for row in DocumentProcessingJob.objects.values("status").annotate(count=Count("pk"))
     }
+    lane_counts = {
+        lane: {
+            status: DocumentProcessingJob.objects.filter(
+                queue_lane=lane,
+                status=status,
+            ).count()
+            for status in ACTIVE_STATUSES
+        }
+        for lane in DocumentProcessingJob.QueueLane.values
+    }
     return {
         "uploads": uploads.count(),
         "uncovered": uploads.annotate(is_covered=Exists(covered)).filter(is_covered=False).count(),
@@ -144,6 +154,7 @@ def processing_status():
                 DocumentProcessingJob.Status.FAILED,
             )
         },
+        "lanes": lane_counts,
     }
 
 

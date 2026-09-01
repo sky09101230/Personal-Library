@@ -146,6 +146,7 @@ class Command(BaseCommand):
         if operation == "status":
             result = processing_status()
             jobs = result["jobs"]
+            lanes = result["lanes"]
             self.stdout.write(
                 " ".join(
                     (
@@ -155,6 +156,10 @@ class Command(BaseCommand):
                         f"running={jobs['running']}",
                         f"succeeded={jobs['succeeded']}",
                         f"failed={jobs['failed']}",
+                        f"realtime_queued={lanes[DocumentProcessingJob.QueueLane.REALTIME][DocumentProcessingJob.Status.QUEUED]}",
+                        f"realtime_running={lanes[DocumentProcessingJob.QueueLane.REALTIME][DocumentProcessingJob.Status.RUNNING]}",
+                        f"backfill_queued={lanes[DocumentProcessingJob.QueueLane.BACKFILL][DocumentProcessingJob.Status.QUEUED]}",
+                        f"backfill_running={lanes[DocumentProcessingJob.QueueLane.BACKFILL][DocumentProcessingJob.Status.RUNNING]}",
                     )
                 )
             )
