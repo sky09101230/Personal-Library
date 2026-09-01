@@ -44,7 +44,7 @@ class Command(BaseCommand):
         worker = literature_commands.add_parser("worker", help="Run the database-backed worker.")
         _add_worker_arguments(worker)
         worker.add_argument("--lane", choices=("all", *DocumentProcessingJob.QueueLane.values), default="all")
-        worker.add_argument("--token-slot", type=int)
+        worker.add_argument("--token-slot", choices=("realtime", "1", "2", "3", "4"))
 
         worker_pool = literature_commands.add_parser(
             "worker-pool",
@@ -116,10 +116,13 @@ class Command(BaseCommand):
             return
         if operation == "worker":
             queue_lane = None if options["lane"] == "all" else options["lane"]
+            token_slot = options["token_slot"]
+            if token_slot and token_slot.isdigit():
+                token_slot = int(token_slot)
             try:
                 token, worker_channel = resolve_worker_token(
                     queue_lane,
-                    options["token_slot"],
+                    token_slot,
                 )
             except WorkerPoolConfigurationError as exc:
                 raise CommandError(str(exc)) from exc

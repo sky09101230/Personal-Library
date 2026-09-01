@@ -278,6 +278,33 @@ class PlabCommandTests(TestCase):
         )
         self.assertIn("Processed 2; succeeded 1; failed 1", output.getvalue())
 
+    @patch.dict("os.environ", {"MINERU_API_TOKEN": "realtime-token"}, clear=False)
+    @patch("apps.literature_processing.management.commands.plab.run_worker")
+    def test_literature_worker_accepts_named_realtime_token_slot(self, worker):
+        worker.return_value = WorkerResult(processed=0, succeeded=0, failed=0)
+
+        call_command(
+            "plab",
+            "literature",
+            "worker",
+            "--lane",
+            "realtime",
+            "--token-slot",
+            "realtime",
+            "--once",
+            stdout=StringIO(),
+        )
+
+        worker.assert_called_once_with(
+            once=True,
+            max_jobs=0,
+            poll_interval=2.0,
+            on_job=ANY,
+            queue_lane="realtime",
+            worker_channel="realtime",
+            mineru_api_token="realtime-token",
+        )
+
     @patch.dict(
         "os.environ",
         {"MINERU_BACKFILL_API_TOKEN_2": "backfill-token"},
