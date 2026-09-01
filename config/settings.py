@@ -42,6 +42,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "apps.accounts",
     "apps.box_upload",
+    "apps.literature_processing",
     "apps.mcp_gateway",
     "apps.skills",
 ]

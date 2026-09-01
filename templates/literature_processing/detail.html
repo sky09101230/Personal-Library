@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}{{ literature.title|default:"文献详情" }} | PLAB{% endblock %}
+{% block content_class %}content-wide{% endblock %}
+{% block content %}
+<nav class="detail-back" aria-label="返回"><a href="{% url 'library' %}">← 文献库</a></nav>
+<header class="page-head literature-detail-head">
+  <p class="eyebrow">Literature Detail</p>
+  <h1>{{ literature.title|default:"未识别标题" }}</h1>
+  <div class="detail-head-actions">
+    {% if source_upload %}<a class="row-action primary-action" href="{% url 'view-document' source_upload.pk %}" target="_blank" rel="noopener">在线打开 PDF</a><a class="row-action" href="{% url 'download-document' source_upload.pk %}">下载</a>{% endif %}
+  </div>
+</header>
+
+<dl class="literature-facts">
+  <div><dt>作者</dt><dd>{% for author in literature.authors %}{{ author.name|default:"姓名未知" }}{% if not forloop.last %}、{% endif %}{% empty %}—{% endfor %}</dd></div>
+  <div><dt>期刊 / 年份</dt><dd>{{ literature.journal|default:"—" }} / {{ literature.publication_year|default:"—" }}</dd></div>
+  <div><dt>DOI</dt><dd>{{ literature.doi|default:"—" }}</dd></div>
+  <div><dt>原始摘要</dt><dd>{{ literature.abstract|default:"—" }}</dd></div>
+</dl>
+
+<section class="detail-section processing-band" aria-labelledby="processing-title">
+  <div>
+    <p class="eyebrow">Processing</p>
+    <h2 id="processing-title">处理状态</h2>
+  </div>
+  <div class="processing-state">
+    <strong class="{% if processing_state.failed %}risk-text{% endif %}">{{ processing_state.label }}</strong>
+    <span>阶段：{{ processing_state.stage }}</span>
+    {% if latest_job %}<span>Pipeline：{{ latest_job.pipeline_version }}</span><span>更新：{{ latest_job.updated_at|date:"Y-m-d H:i" }}</span>{% endif %}
+    {% if processing_state.failed and latest_job.error_message %}<span class="risk-text">{{ latest_job.error_message }}</span>{% endif %}
+  </div>
+</section>
+
+<div class="literature-result-grid">
+  <section class="detail-section" aria-labelledby="overview-title">
+    <p class="eyebrow">Generated Analysis</p>
+    <h2 id="overview-title">AI Overview</h2>
+    {% if overview %}
+      <p class="overview-short">{{ overview.payload.summary_short }}</p>
+      <p class="overview-summary">{{ overview.payload.summary }}</p>
+      {% if overview.payload.topics %}<div class="topic-list" aria-label="主题">{% for topic in overview.payload.topics %}<span class="tag">{{ topic }}</span>{% endfor %}</div>{% endif %}
+      <ol class="key-point-list">
+        {% for point in overview.payload.key_points %}
+        <li>
+          <p>{{ point.text }}</p>
+          <div class="evidence-links">{% for evidence in point.evidence %}{% if source_upload %}<a href="{% url 'view-document' source_upload.pk %}#page={{ evidence.page }}" target="_blank" rel="noopener">PDF 第 {{ evidence.page }} 页</a>{% endif %}<a href="#chunk-{{ evidence.chunk_id }}">片段 {{ evidence.chunk_id }}</a>{% endfor %}</div>
+        </li>
+        {% endfor %}
+      </ol>
+      <p class="analysis-provenance">{{ overview.provider }} · {{ overview.model }} · {{ overview.prompt_version }}</p>
+    {% else %}<p class="subtle">暂无 AI Overview。</p>{% endif %}
+  </section>
+
+  <aside class="detail-section parse-facts" aria-labelledby="parse-title">
+    <p class="eyebrow">Parse Artifact</p>
+    <h2 id="parse-title">解析结果</h2>
+    {% if result_parse %}
+      <dl class="compact-facts">
+        <dt>Parser</dt><dd>{{ result_parse.parser_name }} {{ result_parse.parser_version }}</dd>
+        <dt>页数</dt><dd>{{ result_parse.page_count }}</dd>
+        <dt>Schema</dt><dd>{{ result_parse.schema_version }}</dd>
+        <dt>Artifact</dt><dd>{{ result_parse.artifact_sha256|slice:":12" }}…</dd>
+      </dl>
+      {% if result_parse.warnings %}<ul class="parse-warnings">{% for warning in result_parse.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>{% endif %}
+    {% else %}<p class="subtle">暂无解析结果。</p>{% endif %}
+  </aside>
+</div>
+
+<section class="detail-section parsed-text-section" aria-labelledby="parsed-text-title">
+  <p class="eyebrow">Page Text</p>
+  <h2 id="parsed-text-title">Parsed Text</h2>
+  {% for page in pages %}
+    <details class="parsed-page"{% if forloop.first %} open{% endif %}>
+      <summary><span>第 {{ page.number }} 页</span><span>{{ page.chunks|length }} 个片段</span></summary>
+      <div class="page-chunks">
+        {% for chunk in page.chunks %}<article id="chunk-{{ chunk.pk }}" class="parsed-chunk"><div class="chunk-meta">{{ chunk.chunk_key }}</div><p>{{ chunk.text }}</p></article>{% endfor %}
+      </div>
+    </details>
+  {% empty %}<p class="subtle">暂无解析文本。</p>{% endfor %}
+</section>
+{% endblock %}

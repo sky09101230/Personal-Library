@@ -37,6 +37,7 @@
         </td>
         <td class="document-actions-column">
           <div class="row-actions">
+          <a class="row-action" href="{% url 'literature-detail' literature.pk %}">处理详情</a>
           {% with proposal=literature.latest_metadata_proposal %}
             {% if proposal %}
               {% if proposal.status == 'succeeded' and literature.can_review_ai_metadata %}<a class="row-action" href="{% url 'metadata-review-detail' proposal.pk %}">确认 AI metadata</a>
