@@ -20,4 +20,3 @@ MinerU client 在 allocation、upload、poll、download 和 normalization 阶段
 ## 非目标
 
 不实现 Celery、Redis、Kafka、WebSocket、SSE、分布式 scheduler、全量自动 backfill、retrieval、embedding 或 RAG。5 个 token 是否共享 MinerU 账号总 quota 由官方账号策略决定，本地并发不承诺扩大额度。
-

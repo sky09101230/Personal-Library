@@ -31,4 +31,3 @@ PLAB normalized source-of-truth 优先使用稳定的 `*_content_list.json`。�
 - MinerU API 文档：`https://mineru.net/apiManage/docs`（2026-09-01 核对）
 - MinerU output files：`https://opendatalab.github.io/MinerU/reference/output_files/`
 - `content_list_v2` 官方说明仍标记为 development，因此本阶段不把它设为首选合同。
-
