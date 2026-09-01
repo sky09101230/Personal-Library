@@ -46,3 +46,21 @@ python manage.py plab literature worker --once --max-jobs <count>
 ```
 
 先覆盖 3 页公式文献、中文综述、双栏论文、表格/图像论文和中等长 tutorial。585 页专著只在短样本 API 合同与 quota 验证后运行 segmented smoke；不 backfill 其余历史文献。
+
+## 2026-09-01 真实 smoke 记录
+
+使用官方 v4 API、`vlm` model version 完成 5 篇显式 opt-in 样本，均使用 legacy `content_list.json` 转换，5/5 MinerU parse、raw/normalized NAS artifact、structure chunks 和 Overview 成功，未发生 PyPDF fallback：
+
+| Upload | 页数 | MinerU API 耗时 | Chunks | Raw bundle |
+|---|---:|---:|---:|---:|
+| 163 | 3 | 12.8 s | 7 | 0.30 MB |
+| 613 | 20 | 35.4 s | 38 | 7.59 MB |
+| 647 | 15 | 56.7 s | 38 | 38.63 MB |
+| 416 | 37 | 36.0 s | 84 | 2.82 MB |
+| 127 | 19 | 32.5 s | 58 | 11.12 MB |
+
+实际 API 暴露并已修复三项集成问题：预签名 PUT 不能由 urllib 隐式添加 form content type；MinerU 运行期回退到 parse v1 时必须选 page chunker；VLM legacy content list 实际可能直接返回顶层 `ref_text`。raw 与 normalized artifact 在 NAS 的存在性和 checksum 已抽查一致。
+
+人工式原页对照显示：双栏 reading order、heading、公式 LaTeX、table、figure/caption、header/footer 分类明显优于 PyPDF；中文标题、矩阵公式和双语图注可用，header/footer 默认没有进入 chunks。仍有两个重要缺口：upload 127 的 15 个 blocks 含 31 个 U+FFFD replacement characters，主要损失波长等符号，现保留原输出并记录 `mineru_replacement_character` warning；upload 163 的第一页本身拼接上一篇文章尾部参考文献，MinerU 忠实保留版面但不会推断文章边界。
+
+因此 MinerU 暂时保持 opt-in，不替换生产默认 PyPDF。最小后续 benchmark 是对符号问题样本比较 MinerU `pipeline` 与 `vlm`，并单独解决 PDF 内文章边界；本阶段不开始检索或 RAG。
