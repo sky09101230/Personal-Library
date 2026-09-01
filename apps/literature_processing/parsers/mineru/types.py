@@ -33,6 +33,16 @@ class MinerURawResult:
     runtime_info: dict[str, object]
 
 
+@dataclass(frozen=True, slots=True)
+class MinerUStructuredSegment:
+    index: int
+    page_range: PageRange
+    data_id: str
+    source_format: str
+    source_name: str
+    payload: object
+
+
 def segment_page_ranges(page_count, *, segment_pages=200):
     page_count = int(page_count)
     segment_pages = int(segment_pages)
