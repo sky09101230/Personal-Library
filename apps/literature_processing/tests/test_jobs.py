@@ -9,7 +9,8 @@ from apps.box_upload.models import CanonicalDocument, UploadedDocument
 
 from ..artifacts import ArtifactReference, PARSE_ARTIFACT_CONTENT_TYPE
 from ..jobs import backfill_processing, enqueue_processing, processing_status
-from ..models import DocumentParse, DocumentProcessingJob, LiteratureChunk
+from ..models import DocumentAnalysis, DocumentParse, DocumentProcessingJob, LiteratureChunk
+from ..overview import OVERVIEW_SCHEMA_VERSION
 from ..parsers import (
     STRUCTURED_PARSE_SCHEMA_VERSION,
     BlockKind,
@@ -22,7 +23,7 @@ from ..parsers import (
 from ..parsers.mineru.client import MinerUClient, MinerUConfig
 from ..persistence import persist_parsed_document
 from ..pipeline import SourcePdfTooLarge, claim_next_job, download_source_pdf, process_next_job
-from ..versions import PARSER_VERSION, current_versions, versions_for
+from ..versions import PARSER_VERSION, PROMPT_VERSION, current_versions, versions_for
 
 
 class ProcessingJobTests(TestCase):
@@ -424,11 +425,76 @@ class ProcessingJobTests(TestCase):
         failed = processing_status()
 
         self.assertEqual(initial["uploads"], 1)
+        self.assertEqual(initial["overview"], {"v2": 0, "v1_only": 0, "unprocessed": 1})
         self.assertEqual(initial["uncovered"], 1)
         self.assertEqual(queued["uncovered"], 0)
         self.assertEqual(queued["jobs"]["queued"], 1)
         self.assertEqual(failed["uncovered"], 1)
         self.assertEqual(failed["jobs"]["failed"], 1)
+
+    def test_processing_status_classifies_successful_overview_versions(self):
+        v2_upload = self.create_upload("v2.pdf", "2")
+        unprocessed_upload = self.create_upload("unprocessed.pdf", "3")
+        self._create_successful_overview(self.upload, schema_version="plab.overview.v1", translated=False)
+        self._create_successful_overview(v2_upload, schema_version=OVERVIEW_SCHEMA_VERSION, translated=True)
+
+        result = processing_status()
+
+        self.assertEqual(result["uploads"], 3)
+        self.assertEqual(result["overview"], {"v2": 1, "v1_only": 1, "unprocessed": 1})
+        self.assertTrue(UploadedDocument.objects.filter(pk=unprocessed_upload.pk).exists())
+
+    def _create_successful_overview(self, upload, *, schema_version, translated):
+        job, _ = enqueue_processing(upload, force=True)
+        job.status = DocumentProcessingJob.Status.SUCCEEDED
+        job.stage = DocumentProcessingJob.Stage.COMPLETE
+        job.save(update_fields=("status", "stage", "updated_at"))
+        document_parse = DocumentParse.objects.create(
+            job=job,
+            parser_name="pypdf",
+            parser_version=PARSER_VERSION,
+            schema_version="plab.parse.v1",
+            page_count=1,
+            artifact_storage_backend=upload.storage_backend,
+            artifact_path=f"/Literature/{job.run_id}.json",
+            artifact_sha256=upload.sha256,
+            artifact_size=100,
+        )
+        chunk = LiteratureChunk.objects.create(
+            document_parse=document_parse,
+            chunk_key=f"p0001-c0000-{upload.pk}",
+            sequence=0,
+            page_number=1,
+            page_sequence=0,
+            start_offset=0,
+            end_offset=8,
+            text="Evidence",
+            content_sha256=upload.sha256,
+        )
+        evidence = [{"chunk_id": chunk.pk, "page": 1}]
+        payload = {
+            "summary_short": "Short summary.",
+            "summary": "Summary.",
+            "topics": ["topic"],
+            "key_points": [{"text": "Point.", "evidence": evidence}],
+        }
+        if translated:
+            payload["chinese_translation"] = {
+                "summary_short": "简短摘要。",
+                "summary": "摘要。",
+                "topics": ["主题"],
+                "key_points": [{"text": "结论。", "evidence": evidence}],
+            }
+        return DocumentAnalysis.objects.create(
+            document_parse=document_parse,
+            analysis_type=DocumentAnalysis.AnalysisType.OVERVIEW,
+            schema_version=schema_version,
+            provider="test",
+            model="test-model",
+            prompt_version=PROMPT_VERSION if translated else "overview-v1",
+            input_fingerprint=f"{job.pk:064d}",
+            payload=payload,
+        )
 
 
 class SourcePdfDownloadTests(SimpleTestCase):

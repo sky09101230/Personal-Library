@@ -1,3 +1,5 @@
+import time
+
 from django.core.management.base import BaseCommand, CommandError
 
 from apps.box_upload.models import UploadedDocument
@@ -52,7 +54,9 @@ class Command(BaseCommand):
         )
         worker_pool.add_argument("--poll-interval", type=float, default=2.0)
 
-        literature_commands.add_parser("status", help="Show processing coverage and job counts.")
+        status = literature_commands.add_parser("status", help="Show processing coverage and job counts.")
+        status.add_argument("--watch", action="store_true", help="Refresh continuously until interrupted.")
+        status.add_argument("--interval", type=float, default=2.0, help="Watch refresh interval in seconds.")
 
         process = literature_commands.add_parser(
             "process-existing",
@@ -148,25 +152,7 @@ class Command(BaseCommand):
                 raise CommandError(str(exc)) from exc
             return
         if operation == "status":
-            result = processing_status()
-            jobs = result["jobs"]
-            lanes = result["lanes"]
-            self.stdout.write(
-                " ".join(
-                    (
-                        f"uploads={result['uploads']}",
-                        f"uncovered={result['uncovered']}",
-                        f"queued={jobs['queued']}",
-                        f"running={jobs['running']}",
-                        f"succeeded={jobs['succeeded']}",
-                        f"failed={jobs['failed']}",
-                        f"realtime_queued={lanes[DocumentProcessingJob.QueueLane.REALTIME][DocumentProcessingJob.Status.QUEUED]}",
-                        f"realtime_running={lanes[DocumentProcessingJob.QueueLane.REALTIME][DocumentProcessingJob.Status.RUNNING]}",
-                        f"backfill_queued={lanes[DocumentProcessingJob.QueueLane.BACKFILL][DocumentProcessingJob.Status.QUEUED]}",
-                        f"backfill_running={lanes[DocumentProcessingJob.QueueLane.BACKFILL][DocumentProcessingJob.Status.RUNNING]}",
-                    )
-                )
-            )
+            self._handle_status(options)
             return
         if operation == "process-existing":
             result = process_existing(
@@ -220,6 +206,22 @@ class Command(BaseCommand):
             ending="\n" if current == total else "",
         )
 
+    def _handle_status(self, options):
+        if not options["watch"]:
+            self.stdout.write(_processing_status_summary(processing_status()))
+            return
+
+        interval = max(0.2, options["interval"])
+        previous_width = 0
+        try:
+            while True:
+                summary = _processing_status_watch_summary(processing_status())
+                self.stdout.write(f"\r{summary.ljust(previous_width)}", ending="")
+                previous_width = max(previous_width, len(summary))
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            self.stdout.write("")
+
 
 def _add_worker_arguments(parser):
     parser.add_argument("--once", action="store_true", help="Exit when the queue is empty.")
@@ -229,6 +231,44 @@ def _add_worker_arguments(parser):
 
 def _queue_summary(result):
     return f"Queued {result['created']}; reused/skipped {result['reused']}."
+
+
+def _processing_status_summary(result):
+    overview = result["overview"]
+    jobs = result["jobs"]
+    lanes = result["lanes"]
+    return " ".join(
+        (
+            f"uploads={result['uploads']}",
+            f"overview_v2={overview['v2']}",
+            f"overview_v1_only={overview['v1_only']}",
+            f"overview_unprocessed={overview['unprocessed']}",
+            f"uncovered={result['uncovered']}",
+            f"queued={jobs['queued']}",
+            f"running={jobs['running']}",
+            f"succeeded={jobs['succeeded']}",
+            f"failed={jobs['failed']}",
+            f"realtime_queued={lanes[DocumentProcessingJob.QueueLane.REALTIME][DocumentProcessingJob.Status.QUEUED]}",
+            f"realtime_running={lanes[DocumentProcessingJob.QueueLane.REALTIME][DocumentProcessingJob.Status.RUNNING]}",
+            f"backfill_queued={lanes[DocumentProcessingJob.QueueLane.BACKFILL][DocumentProcessingJob.Status.QUEUED]}",
+            f"backfill_running={lanes[DocumentProcessingJob.QueueLane.BACKFILL][DocumentProcessingJob.Status.RUNNING]}",
+        )
+    )
+
+
+def _processing_status_watch_summary(result):
+    overview = result["overview"]
+    jobs = result["jobs"]
+    lanes = result["lanes"]
+    realtime = lanes[DocumentProcessingJob.QueueLane.REALTIME]
+    backfill = lanes[DocumentProcessingJob.QueueLane.BACKFILL]
+    return " | ".join(
+        (
+            f"overview v2={overview['v2']} v1={overview['v1_only']} none={overview['unprocessed']}",
+            f"jobs q/r/ok/f={jobs['queued']}/{jobs['running']}/{jobs['succeeded']}/{jobs['failed']}",
+            f"rt={realtime['queued']}/{realtime['running']} bf={backfill['queued']}/{backfill['running']}",
+        )
+    )
 
 
 def _worker_summary(result):

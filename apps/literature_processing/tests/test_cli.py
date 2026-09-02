@@ -1,6 +1,6 @@
 from io import StringIO
 from types import SimpleNamespace
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, call, patch
 
 from django.contrib.auth import get_user_model
 from django.core.management import call_command
@@ -350,6 +350,7 @@ class PlabCommandTests(TestCase):
         status.return_value = {
             "uploads": 10,
             "uncovered": 2,
+            "overview": {"v2": 8, "v1_only": 1, "unprocessed": 1},
             "jobs": {"queued": 1, "running": 2, "succeeded": 3, "failed": 4},
             "lanes": {
                 "realtime": {"queued": 1, "running": 0},
@@ -360,9 +361,47 @@ class PlabCommandTests(TestCase):
 
         call_command("plab", "literature", "status", stdout=output)
 
-        self.assertIn("uploads=10 uncovered=2 queued=1 running=2 succeeded=3 failed=4", output.getvalue())
+        self.assertIn("uploads=10 overview_v2=8 overview_v1_only=1 overview_unprocessed=1", output.getvalue())
+        self.assertIn("uncovered=2 queued=1 running=2 succeeded=3 failed=4", output.getvalue())
         self.assertIn("realtime_queued=1 realtime_running=0", output.getvalue())
         self.assertIn("backfill_queued=0 backfill_running=2", output.getvalue())
+
+    @patch("apps.literature_processing.management.commands.plab.time.sleep")
+    @patch("apps.literature_processing.management.commands.plab.processing_status")
+    def test_literature_status_watch_refreshes_until_interrupted(self, status, sleep):
+        first = {
+            "uploads": 10,
+            "uncovered": 2,
+            "overview": {"v2": 8, "v1_only": 1, "unprocessed": 1},
+            "jobs": {"queued": 1, "running": 2, "succeeded": 3, "failed": 4},
+            "lanes": {
+                "realtime": {"queued": 1, "running": 0},
+                "backfill": {"queued": 0, "running": 2},
+            },
+        }
+        second = {
+            **first,
+            "overview": {"v2": 9, "v1_only": 0, "unprocessed": 1},
+            "jobs": {"queued": 0, "running": 1, "succeeded": 5, "failed": 4},
+        }
+        status.side_effect = [first, second, KeyboardInterrupt]
+        output = StringIO()
+
+        call_command(
+            "plab",
+            "literature",
+            "status",
+            "--watch",
+            "--interval",
+            "0.1",
+            stdout=output,
+        )
+
+        self.assertEqual(sleep.call_args_list, [call(0.2), call(0.2)])
+        self.assertIn("\roverview v2=8 v1=1 none=1", output.getvalue())
+        self.assertIn("\roverview v2=9 v1=0 none=1", output.getvalue())
+        self.assertIn("jobs q/r/ok/f=0/1/5/4", output.getvalue())
+        self.assertIn("rt=1/0 bf=0/2", output.getvalue())
 
     @patch("apps.literature_processing.management.commands.plab.process_existing")
     def test_process_existing_delegates_to_composed_service(self, process):
