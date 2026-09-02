@@ -3,16 +3,26 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
+from pypdf import PdfWriter
 
 from apps.box_upload.models import CanonicalDocument, UploadedDocument
 
 from ..artifacts import ArtifactReference, PARSE_ARTIFACT_CONTENT_TYPE
 from ..jobs import backfill_processing, enqueue_processing, processing_status
 from ..models import DocumentParse, DocumentProcessingJob, LiteratureChunk
-from ..parsers import ParsedDocument, ParsedPage
+from ..parsers import (
+    STRUCTURED_PARSE_SCHEMA_VERSION,
+    BlockKind,
+    ParsedBlock,
+    ParsedDocument,
+    ParsedPage,
+    ParserOutput,
+    ParserRawArtifact,
+)
+from ..parsers.mineru.client import MinerUClient, MinerUConfig
 from ..persistence import persist_parsed_document
-from ..pipeline import SourcePdfTooLarge, download_source_pdf, process_next_job
-from ..versions import PARSER_VERSION, current_versions
+from ..pipeline import SourcePdfTooLarge, claim_next_job, download_source_pdf, process_next_job
+from ..versions import PARSER_VERSION, current_versions, versions_for
 
 
 class ProcessingJobTests(TestCase):
@@ -87,6 +97,66 @@ class ProcessingJobTests(TestCase):
         self.assertNotEqual(current.pk, legacy.pk)
         self.assertEqual(current.pipeline_version, current_versions()["pipeline_version"])
 
+    def test_enqueue_can_opt_into_mineru_without_changing_default_versions(self):
+        job, created = enqueue_processing(
+            self.upload,
+            parser_name="mineru",
+            queue_lane=DocumentProcessingJob.QueueLane.REALTIME,
+        )
+
+        self.assertTrue(created)
+        self.assertEqual(job.parser_name, "mineru")
+        self.assertEqual(job.queue_lane, DocumentProcessingJob.QueueLane.REALTIME)
+        for field, value in versions_for("mineru").items():
+            self.assertEqual(getattr(job, field), value)
+        self.assertEqual(current_versions()["chunker_version"], "page-chars-v2")
+        self.assertEqual(versions_for("mineru")["chunker_version"], "structure-blocks-v1")
+
+    def test_claim_is_lane_scoped_and_records_worker_channel(self):
+        backfill, _ = enqueue_processing(
+            self.upload,
+            parser_name="mineru",
+            queue_lane=DocumentProcessingJob.QueueLane.BACKFILL,
+        )
+        realtime_upload = self.create_upload("realtime.pdf", "8")
+        realtime, _ = enqueue_processing(
+            realtime_upload,
+            parser_name="mineru",
+            queue_lane=DocumentProcessingJob.QueueLane.REALTIME,
+        )
+
+        claimed = claim_next_job(
+            queue_lane=DocumentProcessingJob.QueueLane.REALTIME,
+            worker_channel="realtime",
+        )
+
+        backfill.refresh_from_db()
+        realtime.refresh_from_db()
+        self.assertEqual(claimed.pk, realtime.pk)
+        self.assertEqual(realtime.status, DocumentProcessingJob.Status.RUNNING)
+        self.assertEqual(realtime.worker_channel, "realtime")
+        self.assertIsNotNone(realtime.heartbeat_at)
+        self.assertEqual(backfill.status, DocumentProcessingJob.Status.QUEUED)
+
+    @patch.dict("os.environ", {}, clear=True)
+    def test_explicit_mineru_job_without_token_fails_without_affecting_upload(self):
+        job, _ = enqueue_processing(self.upload, parser_name="mineru")
+        writer = PdfWriter()
+        writer.add_blank_page(width=200, height=200)
+        source = BytesIO()
+        writer.write(source)
+        source.seek(0)
+
+        with self.assertLogs("apps.literature_processing.pipeline", level="ERROR"):
+            processed = process_next_job(downloader=lambda upload: source)
+
+        processed.refresh_from_db()
+        self.assertEqual(processed.pk, job.pk)
+        self.assertEqual(processed.status, DocumentProcessingJob.Status.FAILED)
+        self.assertEqual(processed.stage, DocumentProcessingJob.Stage.PARSE)
+        self.assertEqual(processed.error_code, "parse_mineru_configuration")
+        self.assertTrue(UploadedDocument.objects.filter(pk=self.upload.pk).exists())
+
     def test_worker_success_persists_parse_and_traceable_chunks(self):
         job, _ = enqueue_processing(self.upload)
         source = BytesIO(b"source")
@@ -111,6 +181,142 @@ class ProcessingJobTests(TestCase):
         self.assertEqual(chunk.uploaded_document, self.upload)
         self.assertEqual(chunk.canonical_document, self.upload.canonical_document)
         self.assertTrue(source.closed)
+
+    def test_worker_persists_provider_progress_and_completes_state(self):
+        job, _ = enqueue_processing(
+            self.upload,
+            parser_name="mineru",
+            queue_lane=DocumentProcessingJob.QueueLane.REALTIME,
+        )
+
+        def parser(file_obj, parser_name):
+            client = MinerUClient(
+                MinerUConfig(
+                    base_url="https://mineru.example/api/v4",
+                    token="test-token",
+                    model_version="vlm",
+                    request_timeout=30,
+                    poll_interval=0,
+                    poll_timeout=30,
+                    segment_pages=200,
+                    result_max_bytes=1024,
+                )
+            )
+            client._emit(
+                "running",
+                current=2,
+                total=3,
+                unit="pages",
+                batch_id="batch-progress",
+            )
+            return self.parsed_document("Progress evidence.")
+
+        processed = process_next_job(
+            queue_lane=DocumentProcessingJob.QueueLane.REALTIME,
+            worker_channel="realtime",
+            downloader=lambda upload: BytesIO(b"source"),
+            parser=parser,
+            persister=lambda claimed_job, parsed: persist_parsed_document(
+                claimed_job,
+                parsed,
+                artifact_writer=self.artifact_writer,
+            ),
+            overview_processor=lambda document_parse: None,
+        )
+
+        processed.refresh_from_db()
+        self.assertEqual(processed.pk, job.pk)
+        self.assertEqual(processed.provider_state, "complete")
+        self.assertEqual(processed.provider_batch_id, "batch-progress")
+        self.assertEqual((processed.progress_current, processed.progress_total), (2, 3))
+        self.assertEqual(processed.progress_unit, "pages")
+        self.assertEqual(processed.worker_channel, "realtime")
+        self.assertIsNotNone(processed.heartbeat_at)
+
+    def test_mineru_job_persists_raw_normalized_and_structured_chunks(self):
+        job, _ = enqueue_processing(self.upload, parser_name="mineru")
+        block = ParsedBlock(
+            block_id="p0001-b0000",
+            page_number=1,
+            reading_order=0,
+            kind=BlockKind.PARAGRAPH,
+            text="Structured evidence.",
+            source={"provider": "mineru", "source_index": 0},
+        )
+        output = ParserOutput(
+            document=ParsedDocument(
+                parser_name="mineru",
+                parser_version="mineru-api-v4-vlm",
+                pages=(ParsedPage(1, block.text, (block,)),),
+                schema_version=STRUCTURED_PARSE_SCHEMA_VERSION,
+            ),
+            raw_artifact=ParserRawArtifact(
+                filename="raw.zip",
+                content=b"raw",
+                content_type="application/vnd.plab.mineru-result+zip",
+            ),
+        )
+        raw_reference = ArtifactReference(
+            storage_backend="nas_webdav",
+            path="/Literature/derived/parses/raw.zip",
+            sha256="b" * 64,
+            content_type=output.raw_artifact.content_type,
+            size=3,
+        )
+
+        processed = process_next_job(
+            downloader=lambda upload: BytesIO(b"source"),
+            parser=lambda file_obj, parser_name: output,
+            persister=lambda claimed_job, parsed: persist_parsed_document(
+                claimed_job,
+                parsed,
+                artifact_writer=self.artifact_writer,
+                raw_artifact_writer=lambda upload, raw_job, artifact: raw_reference,
+            ),
+            overview_processor=lambda document_parse: None,
+        )
+
+        processed.refresh_from_db()
+        document_parse = DocumentParse.objects.get(job=job)
+        chunk = LiteratureChunk.objects.get(document_parse=document_parse)
+        self.assertEqual(processed.status, DocumentProcessingJob.Status.SUCCEEDED)
+        self.assertEqual(document_parse.parser_name, "mineru")
+        self.assertEqual(document_parse.raw_artifact_path, raw_reference.path)
+        self.assertEqual(chunk.text, block.text)
+        self.assertEqual(chunk.source_spans[0]["block_id"], block.block_id)
+
+    def test_mineru_runtime_fallback_uses_page_chunker_for_actual_v1_parse(self):
+        job, _ = enqueue_processing(self.upload, parser_name="mineru")
+        fallback = ParsedDocument(
+            parser_name="pypdf",
+            parser_version=PARSER_VERSION,
+            pages=(ParsedPage(1, "Fallback page evidence."),),
+            warnings=("mineru_failed_fallback_pypdf",),
+            runtime_info={
+                "requested_parser": "mineru",
+                "actual_parser": "pypdf",
+                "fallback_used": True,
+            },
+        )
+
+        processed = process_next_job(
+            downloader=lambda upload: BytesIO(b"source"),
+            parser=lambda file_obj, parser_name: fallback,
+            persister=lambda claimed_job, parsed: persist_parsed_document(
+                claimed_job,
+                parsed,
+                artifact_writer=self.artifact_writer,
+            ),
+            overview_processor=lambda document_parse: None,
+        )
+
+        processed.refresh_from_db()
+        document_parse = DocumentParse.objects.get(job=job)
+        chunk = LiteratureChunk.objects.get(document_parse=document_parse)
+        self.assertEqual(processed.status, DocumentProcessingJob.Status.SUCCEEDED)
+        self.assertEqual(document_parse.parser_name, "pypdf")
+        self.assertIn("mineru_failed_fallback_pypdf", document_parse.warnings)
+        self.assertEqual(chunk.text, "Fallback page evidence.")
 
     def test_worker_failure_keeps_upload_and_next_job_can_succeed(self):
         first_job, _ = enqueue_processing(self.upload)
@@ -163,13 +369,31 @@ class ProcessingJobTests(TestCase):
         self.assertTrue(DocumentProcessingJob.objects.filter(uploaded_document=second_upload).exists())
         self.assertEqual(DocumentProcessingJob.objects.count(), 2)
 
+    def test_backfill_reports_enqueue_progress(self):
+        self.create_upload("second.pdf", "2")
+        progress = []
+
+        result = backfill_processing(
+            limit=2,
+            on_progress=lambda **state: progress.append(state),
+        )
+
+        self.assertEqual(result, {"created": 2, "reused": 0})
+        self.assertEqual(progress, [
+            {"current": 0, "total": 2, "created": 0, "reused": 0},
+            {"current": 1, "total": 2, "created": 1, "reused": 0},
+            {"current": 2, "total": 2, "created": 2, "reused": 0},
+        ])
+
     def test_new_primary_upload_enqueues_after_commit(self):
         with self.captureOnCommitCallbacks(execute=True):
             upload = self.create_upload("signal.pdf", "4")
 
         job = DocumentProcessingJob.objects.get(uploaded_document=upload)
         self.assertEqual(job.status, DocumentProcessingJob.Status.QUEUED)
-        for field, value in current_versions().items():
+        self.assertEqual(job.parser_name, "mineru")
+        self.assertEqual(job.queue_lane, DocumentProcessingJob.QueueLane.REALTIME)
+        for field, value in versions_for("mineru").items():
             self.assertEqual(getattr(job, field), value)
 
     def test_enqueue_failure_after_commit_does_not_fail_upload(self):

@@ -226,7 +226,16 @@
     .processing-state { display: flex; flex-wrap: wrap; gap: 7px 18px; align-items: baseline; }
     .processing-state strong { font-size: 17px; }
     .processing-state span { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+    .processing-progress { display: grid; grid-template-columns: minmax(180px, 1fr) auto; align-items: center; gap: 10px; flex: 1 0 100%; }
+    .processing-progress[hidden] { display: none; }
+    .processing-progress progress { width: 100%; height: 8px; accent-color: var(--accent); }
     .literature-result-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(250px, 340px); gap: 42px; }
+    .overview-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 12px 20px; }
+    .overview-heading h2 { margin-bottom: 16px; }
+    .overview-language-switch { display: inline-flex; flex-shrink: 0; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel); }
+    .overview-language-switch button { min-width: 56px; padding: 6px 9px; border: 0; border-radius: 3px; background: transparent; color: var(--muted); cursor: pointer; font: inherit; font-size: 12px; }
+    .overview-language-switch button.active { background: var(--accent); color: #fff; }
+    .overview-panel[hidden] { display: none; }
     .overview-short { margin: 0 0 13px; font-size: 17px; font-weight: 700; }
     .overview-summary { max-width: 820px; white-space: pre-wrap; }
     .topic-list { display: flex; flex-wrap: wrap; gap: 7px; margin: 18px 0; }

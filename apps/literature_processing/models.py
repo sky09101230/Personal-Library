@@ -4,6 +4,10 @@ from django.db import models
 
 
 class DocumentProcessingJob(models.Model):
+    class QueueLane(models.TextChoices):
+        REALTIME = "realtime", "Realtime"
+        BACKFILL = "backfill", "Backfill"
+
     class Status(models.TextChoices):
         QUEUED = "queued", "Queued"
         RUNNING = "running", "Running"
@@ -26,6 +30,13 @@ class DocumentProcessingJob(models.Model):
     )
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED, db_index=True)
     stage = models.CharField(max_length=16, choices=Stage.choices, default=Stage.QUEUED)
+    queue_lane = models.CharField(
+        max_length=16,
+        choices=QueueLane.choices,
+        default=QueueLane.BACKFILL,
+        db_index=True,
+    )
+    parser_name = models.CharField(max_length=64, default="pypdf")
     pipeline_version = models.CharField(max_length=64)
     parser_version = models.CharField(max_length=64)
     chunker_version = models.CharField(max_length=64)
@@ -33,6 +44,13 @@ class DocumentProcessingJob(models.Model):
     attempt_count = models.PositiveIntegerField(default=0)
     error_code = models.CharField(max_length=64, blank=True)
     error_message = models.TextField(blank=True)
+    provider_state = models.CharField(max_length=32, blank=True)
+    provider_batch_id = models.CharField(max_length=128, blank=True)
+    progress_current = models.PositiveIntegerField(null=True, blank=True)
+    progress_total = models.PositiveIntegerField(null=True, blank=True)
+    progress_unit = models.CharField(max_length=16, blank=True)
+    worker_channel = models.CharField(max_length=32, blank=True)
+    heartbeat_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
@@ -49,6 +67,10 @@ class DocumentProcessingJob(models.Model):
         ]
         indexes = [
             models.Index(fields=("status", "created_at"), name="lp_job_queue_idx"),
+            models.Index(
+                fields=("queue_lane", "status", "created_at"),
+                name="lp_job_lane_queue_idx",
+            ),
         ]
 
     def __str__(self):
@@ -71,6 +93,12 @@ class DocumentParse(models.Model):
     artifact_content_type = models.CharField(max_length=255, default="application/json")
     artifact_size = models.PositiveBigIntegerField()
     warnings = models.JSONField(default=list, blank=True)
+    runtime_info = models.JSONField(default=dict, blank=True)
+    raw_artifact_storage_backend = models.CharField(max_length=32, blank=True)
+    raw_artifact_path = models.CharField(max_length=1000, blank=True)
+    raw_artifact_sha256 = models.CharField(max_length=64, blank=True)
+    raw_artifact_content_type = models.CharField(max_length=255, blank=True)
+    raw_artifact_size = models.PositiveBigIntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -97,11 +125,14 @@ class LiteratureChunk(models.Model):
     chunk_key = models.CharField(max_length=128)
     sequence = models.PositiveIntegerField()
     page_number = models.PositiveIntegerField()
+    end_page_number = models.PositiveIntegerField(null=True, blank=True)
     page_sequence = models.PositiveIntegerField()
     start_offset = models.PositiveIntegerField()
     end_offset = models.PositiveIntegerField()
     text = models.TextField()
     content_sha256 = models.CharField(max_length=64)
+    section_path = models.JSONField(default=list, blank=True)
+    source_spans = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -126,6 +157,13 @@ class LiteratureChunk(models.Model):
             models.CheckConstraint(
                 condition=models.Q(end_offset__gt=models.F("start_offset")),
                 name="lp_chunk_offsets_valid",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(end_page_number__isnull=True)
+                    | models.Q(end_page_number__gte=models.F("page_number"))
+                ),
+                name="lp_chunk_page_range_valid",
             ),
         ]
         indexes = [

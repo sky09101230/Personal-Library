@@ -1,4 +1,5 @@
 from django.contrib.auth.decorators import login_required
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, render
 from django.views.decorators.http import require_GET
 
@@ -20,6 +21,21 @@ _STAGE_LABELS = {
     DocumentProcessingJob.Stage.CHUNK: "生成文本片段",
     DocumentProcessingJob.Stage.OVERVIEW: "生成 AI Overview",
     DocumentProcessingJob.Stage.COMPLETE: "完成",
+}
+_PROVIDER_STATE_LABELS = {
+    "download": "读取原始 PDF",
+    "parse": "准备解析",
+    "allocating": "创建 MinerU 任务",
+    "uploading": "上传至 MinerU",
+    "pending": "MinerU 排队中",
+    "running": "MinerU 解析中",
+    "converting": "MinerU 转换中",
+    "downloading": "下载 MinerU 结果",
+    "normalizing": "转换 PLAB 结构",
+    "chunking": "生成文本片段",
+    "overview": "生成 AI Overview",
+    "complete": "处理完成",
+    "failed": "处理失败",
 }
 
 
@@ -44,11 +60,7 @@ def literature_detail(request, document_id):
         pages = _group_chunks_by_page(result_parse)
 
     source_upload = result_parse.uploaded_document if result_parse else _primary_upload(literature)
-    processing_state = {
-        "label": _STATUS_LABELS.get(latest_job.status, latest_job.status) if latest_job else "尚未排队",
-        "stage": _STAGE_LABELS.get(latest_job.stage, latest_job.stage) if latest_job else "—",
-        "failed": bool(latest_job and latest_job.status == DocumentProcessingJob.Status.FAILED),
-    }
+    processing_state = _processing_state(latest_job)
     return render(
         request,
         "literature_processing/detail.html",
@@ -62,6 +74,22 @@ def literature_detail(request, document_id):
             "source_upload": source_upload,
         },
     )
+
+
+@login_required
+@require_GET
+def literature_processing_status(request, document_id):
+    literature = get_object_or_404(CanonicalDocument, pk=document_id)
+    latest_job = (
+        DocumentProcessingJob.objects.filter(
+            uploaded_document__canonical_document=literature,
+            uploaded_document__status=UploadedDocument.Status.UPLOADED,
+            uploaded_document__file_role=UploadedDocument.FileRole.PRIMARY,
+        )
+        .select_related("uploaded_document")
+        .first()
+    )
+    return JsonResponse(_processing_state(latest_job, include_machine_values=True))
 
 
 def _job_parse(job):
@@ -89,3 +117,51 @@ def _group_chunks_by_page(document_parse):
             pages.append(current)
         current["chunks"].append(chunk)
     return pages
+
+
+def _processing_state(job, *, include_machine_values=False):
+    if job is None:
+        state = {
+            "label": "尚未排队",
+            "stage": "—",
+            "failed": False,
+            "terminal": True,
+            "progress_current": None,
+            "progress_total": None,
+            "progress_unit": "",
+            "progress_percent": None,
+            "error_message": "",
+        }
+        if include_machine_values:
+            state.update({"job_id": None, "status": "not_queued", "provider_state": ""})
+        return state
+
+    progress_percent = None
+    if job.progress_total and job.progress_current is not None:
+        progress_percent = min(100, round(job.progress_current * 100 / job.progress_total))
+    provider_stage = _PROVIDER_STATE_LABELS.get(job.provider_state)
+    state = {
+        "label": _STATUS_LABELS.get(job.status, job.status),
+        "stage": provider_stage or _STAGE_LABELS.get(job.stage, job.stage),
+        "failed": job.status == DocumentProcessingJob.Status.FAILED,
+        "terminal": job.status in {
+            DocumentProcessingJob.Status.SUCCEEDED,
+            DocumentProcessingJob.Status.FAILED,
+        },
+        "progress_current": job.progress_current,
+        "progress_total": job.progress_total,
+        "progress_unit": job.progress_unit,
+        "progress_percent": progress_percent,
+        "error_message": job.error_message if job.status == DocumentProcessingJob.Status.FAILED else "",
+    }
+    if include_machine_values:
+        state.update({
+            "job_id": job.pk,
+            "status": job.status,
+            "provider_state": job.provider_state,
+            "parser_name": job.parser_name,
+            "queue_lane": job.queue_lane,
+            "updated_at": job.updated_at.isoformat(),
+            "heartbeat_at": job.heartbeat_at.isoformat() if job.heartbeat_at else None,
+        })
+    return state

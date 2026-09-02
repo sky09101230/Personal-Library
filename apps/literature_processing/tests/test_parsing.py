@@ -9,12 +9,30 @@ from pypdf import PdfWriter
 
 from apps.box_upload.models import CanonicalDocument, UploadedDocument
 
-from ..artifacts import ArtifactReference, PARSE_ARTIFACT_CONTENT_TYPE, store_parse_artifact
+from ..artifacts import (
+    ArtifactReference,
+    PARSE_ARTIFACT_CONTENT_TYPE,
+    store_parse_artifact,
+    store_raw_parse_artifact,
+)
 from ..chunking import chunk_document
 from ..models import DocumentProcessingJob, LiteratureChunk
-from ..parsers import ParsedDocument, ParsedPage, ParserUnavailable, get_parser
+from ..parsers import (
+    STRUCTURED_PARSE_SCHEMA_VERSION,
+    BlockKind,
+    ParsedBlock,
+    ParsedBoundingBox,
+    ParsedDocument,
+    ParsedPage,
+    ParserOutput,
+    ParserRawArtifact,
+    ParserUnavailable,
+    get_parser,
+)
 from ..parsers.pypdf_adapter import PyPdfParser
+from ..parsers.mineru.parser import MinerUParser
 from ..persistence import persist_parsed_document
+from ..structure_chunking import chunk_structured_document
 
 
 class ParserContractTests(SimpleTestCase):
@@ -52,8 +70,35 @@ class ParserContractTests(SimpleTestCase):
 
     def test_registry_has_explicit_adapter_boundary(self):
         self.assertIsInstance(get_parser("pypdf"), PyPdfParser)
+        self.assertIsInstance(get_parser("mineru"), MinerUParser)
         with self.assertRaises(ParserUnavailable):
-            get_parser("mineru")
+            get_parser("docling")
+
+    def test_v2_contract_keeps_provider_neutral_blocks_and_bbox(self):
+        block = ParsedBlock(
+            block_id="p0001-b0000-test",
+            page_number=1,
+            reading_order=0,
+            kind=BlockKind.HEADING,
+            text="Methods",
+            bounding_box=ParsedBoundingBox(10, 20, 900, 80),
+            heading_level=1,
+            section_path=("Methods",),
+            source={"provider": "fake", "source_index": 4},
+        )
+        document = ParsedDocument(
+            parser_name="fake",
+            parser_version="fake-v1",
+            pages=(ParsedPage(number=1, text="Methods", blocks=(block,)),),
+            schema_version=STRUCTURED_PARSE_SCHEMA_VERSION,
+        )
+
+        payload = document.as_dict()
+
+        self.assertEqual(payload["schema_version"], "plab.parse.v2")
+        self.assertEqual(payload["pages"][0]["blocks"][0]["type"], "heading")
+        self.assertEqual(payload["pages"][0]["blocks"][0]["bbox"]["right"], 900)
+        self.assertNotIn("mineru", str(payload).lower())
 
     def test_pypdf_adapter_parses_real_blank_pdf_without_losing_pages(self):
         writer = PdfWriter()
@@ -111,6 +156,76 @@ class ChunkingTests(SimpleTestCase):
         self.assertEqual(page_one[0].text, "Final paragraph.")
         self.assertLessEqual(len(page_two), 3)
         self.assertTrue(page_two[-1].text.endswith("B"))
+
+    def test_structure_chunking_preserves_blocks_and_excludes_page_furniture(self):
+        def block(order, kind, text, *, section=("Results",), page=1):
+            return ParsedBlock(
+                block_id=f"p{page:04d}-b{order:04d}",
+                page_number=page,
+                reading_order=order,
+                kind=kind,
+                text=text,
+                section_path=section,
+            )
+
+        table_text = "| A | B |\n" + "| value | result |\n" * 8
+        page = ParsedPage(
+            number=1,
+            text="",
+            blocks=(
+                block(0, BlockKind.HEADER, "Repeated journal header", section=()),
+                block(1, BlockKind.HEADING, "Results"),
+                block(2, BlockKind.PARAGRAPH, "Measured response increased."),
+                block(3, BlockKind.EQUATION, "$E = mc^2$"),
+                block(4, BlockKind.TABLE, table_text),
+                block(5, BlockKind.FOOTER, "Page 1", section=()),
+            ),
+        )
+        document = ParsedDocument(
+            parser_name="structured-test",
+            parser_version="test-v1",
+            pages=(page,),
+            schema_version=STRUCTURED_PARSE_SCHEMA_VERSION,
+        )
+
+        chunks = chunk_structured_document(document, target_chars=80)
+
+        combined = "\n".join(chunk.text for chunk in chunks)
+        self.assertNotIn("Repeated journal header", combined)
+        self.assertNotIn("Page 1", combined)
+        self.assertIn("Measured response increased.\n\n$E = mc^2$", combined)
+        table_chunk = next(chunk for chunk in chunks if table_text.strip() in chunk.text)
+        self.assertGreater(len(table_chunk.text), 80)
+        self.assertEqual(len(table_chunk.source_spans), 1)
+        source = page.blocks[4]
+        span = table_chunk.source_spans[0]
+        self.assertEqual(span["block_id"], source.block_id)
+        self.assertEqual(
+            table_chunk.text[span["chunk_start"] : span["chunk_end"]],
+            source.text[span["block_start"] : span["block_end"]],
+        )
+
+    def test_structure_chunking_splits_long_text_at_word_boundary(self):
+        text = " ".join(f"word{index}" for index in range(50))
+        block = ParsedBlock(
+            block_id="p0001-b0000",
+            page_number=1,
+            reading_order=0,
+            kind=BlockKind.PARAGRAPH,
+            text=text,
+        )
+        document = ParsedDocument(
+            parser_name="structured-test",
+            parser_version="test-v1",
+            pages=(ParsedPage(number=1, text=text, blocks=(block,)),),
+            schema_version=STRUCTURED_PARSE_SCHEMA_VERSION,
+        )
+
+        chunks = chunk_structured_document(document, target_chars=75)
+
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(chunk.text.startswith("word") for chunk in chunks))
+        self.assertTrue(all(len(chunk.text) <= 75 for chunk in chunks))
 
 
 class ParsePersistenceTests(TestCase):
@@ -172,6 +287,76 @@ class ParsePersistenceTests(TestCase):
         self.assertEqual(reference.content_type, PARSE_ARTIFACT_CONTENT_TYPE)
         self.assertEqual(reference.sha256, hashlib.sha256(storage.uploaded).hexdigest())
         self.assertEqual(reference.size, len(storage.uploaded))
+
+    def test_store_raw_artifact_uses_derived_parse_namespace(self):
+        class FakeStorage:
+            name = "nas_webdav"
+
+            def upload(self, uploaded_file, namespace=""):
+                self.uploaded = b"".join(uploaded_file.chunks())
+                self.namespace = namespace
+                return "/Literature/derived/parses/raw.zip"
+
+        storage = FakeStorage()
+        raw = ParserRawArtifact(
+            filename="mineru-result.zip",
+            content=b"raw-zip",
+            content_type="application/vnd.plab.mineru-result+zip",
+        )
+
+        reference = store_raw_parse_artifact(
+            self.upload,
+            self.job,
+            raw,
+            storage_factory=lambda backend: storage,
+        )
+
+        self.assertEqual(storage.namespace, "derived/parses")
+        self.assertEqual(storage.uploaded, b"raw-zip")
+        self.assertEqual(reference.path, "/Literature/derived/parses/raw.zip")
+        self.assertEqual(reference.content_type, raw.content_type)
+
+    def test_persistence_tracks_raw_and_normalized_artifacts(self):
+        raw_reference = ArtifactReference(
+            storage_backend="nas_webdav",
+            path="/Literature/derived/parses/raw.zip",
+            sha256="3" * 64,
+            content_type="application/vnd.plab.mineru-result+zip",
+            size=321,
+        )
+        normalized_reference = ArtifactReference(
+            storage_backend="nas_webdav",
+            path="/Literature/derived/parses/normalized.json",
+            sha256="4" * 64,
+            content_type=PARSE_ARTIFACT_CONTENT_TYPE,
+            size=123,
+        )
+        output = ParserOutput(
+            document=ParsedDocument(
+                parser_name="pypdf",
+                parser_version="pypdf-test",
+                pages=(ParsedPage(1, "Traceable page text."),),
+                runtime_info={"requested_parser": "mineru", "fallback_used": True},
+            ),
+            raw_artifact=ParserRawArtifact(
+                filename="raw.zip",
+                content=b"raw",
+                content_type=raw_reference.content_type,
+            ),
+        )
+
+        document_parse = persist_parsed_document(
+            self.job,
+            output,
+            artifact_writer=lambda upload, job, parsed: normalized_reference,
+            raw_artifact_writer=lambda upload, job, raw: raw_reference,
+        )
+
+        self.assertEqual(document_parse.artifact_path, normalized_reference.path)
+        self.assertEqual(document_parse.raw_artifact_path, raw_reference.path)
+        self.assertEqual(document_parse.raw_artifact_sha256, raw_reference.sha256)
+        self.assertEqual(document_parse.raw_artifact_size, raw_reference.size)
+        self.assertTrue(document_parse.runtime_info["fallback_used"])
 
     def test_persisted_chunks_keep_full_traceability_and_reuse_same_job_result(self):
         calls = []

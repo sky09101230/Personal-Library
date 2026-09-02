@@ -32,6 +32,7 @@ class LiteratureDetailViewTests(TestCase):
             size=128,
         )
         self.url = reverse("literature-detail", args=[self.literature.pk])
+        self.status_url = reverse("literature-processing-status", args=[self.literature.pk])
 
     def create_job(self, *, status, stage, suffix):
         return DocumentProcessingJob.objects.create(
@@ -66,6 +67,16 @@ class LiteratureDetailViewTests(TestCase):
             artifact_path=f"/Literature/{job.run_id}.json",
             artifact_sha256="e" * 64,
             artifact_size=100,
+            raw_artifact_storage_backend=self.upload.storage_backend,
+            raw_artifact_path=f"/Literature/{job.run_id}-raw.zip",
+            raw_artifact_sha256="a" * 64,
+            raw_artifact_content_type="application/vnd.plab.mineru-result+zip",
+            raw_artifact_size=200,
+            runtime_info={
+                "model_version": "vlm",
+                "batch_id": "batch-test",
+                "page_ranges": ["1-2"],
+            },
         )
         text = "Evidence preserved from page two."
         chunk = LiteratureChunk.objects.create(
@@ -78,6 +89,8 @@ class LiteratureDetailViewTests(TestCase):
             end_offset=len(text),
             text=text,
             content_sha256="f" * 64,
+            end_page_number=2,
+            section_path=["Results"],
         )
         analysis = DocumentAnalysis.objects.create(
             document_parse=document_parse,
@@ -97,6 +110,17 @@ class LiteratureDetailViewTests(TestCase):
                         "evidence": [{"chunk_id": chunk.pk, "page": 2}],
                     }
                 ],
+                "chinese_translation": {
+                    "summary_short": "简短综述。",
+                    "summary": "基于解析页面的中文翻译。",
+                    "topics": ["可追溯性"],
+                    "key_points": [
+                        {
+                            "text": "可追溯的中文结论。",
+                            "evidence": [{"chunk_id": chunk.pk, "page": 2}],
+                        }
+                    ],
+                },
             },
         )
         return job, document_parse, chunk, analysis
@@ -106,6 +130,10 @@ class LiteratureDetailViewTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, f"{reverse('login')}?next={self.url}")
+
+        status_response = self.client.get(self.status_url)
+        self.assertEqual(status_response.status_code, 302)
+        self.assertEqual(status_response.url, f"{reverse('login')}?next={self.status_url}")
 
     def test_unprocessed_detail_keeps_original_metadata_and_pdf_actions(self):
         self.client.force_login(self.user)
@@ -134,9 +162,74 @@ class LiteratureDetailViewTests(TestCase):
         failed_response = self.client.get(self.url)
 
         self.assertContains(queued_response, "等待处理")
+        self.assertContains(queued_response, self.status_url)
+        self.assertContains(queued_response, "setInterval(refresh, 2000)")
         self.assertContains(failed_response, "处理失败")
         self.assertContains(failed_response, "Literature processing failed during overview.")
         self.assertTrue(UploadedDocument.objects.filter(pk=self.upload.pk).exists())
+
+    def test_processing_status_endpoint_reports_live_page_progress(self):
+        job = self.create_job(
+            status=DocumentProcessingJob.Status.RUNNING,
+            stage=DocumentProcessingJob.Stage.PARSE,
+            suffix="progress",
+        )
+        job.parser_name = "mineru"
+        job.queue_lane = DocumentProcessingJob.QueueLane.REALTIME
+        job.provider_state = "running"
+        job.provider_batch_id = "batch-status"
+        job.progress_current = 12
+        job.progress_total = 37
+        job.progress_unit = "pages"
+        job.save(
+            update_fields=(
+                "parser_name",
+                "queue_lane",
+                "provider_state",
+                "provider_batch_id",
+                "progress_current",
+                "progress_total",
+                "progress_unit",
+                "updated_at",
+            )
+        )
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.status_url)
+        payload = response.json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["job_id"], job.pk)
+        self.assertEqual(payload["stage"], "MinerU 解析中")
+        self.assertEqual(payload["provider_state"], "running")
+        self.assertEqual(payload["parser_name"], "mineru")
+        self.assertEqual(payload["queue_lane"], "realtime")
+        self.assertEqual(payload["progress_current"], 12)
+        self.assertEqual(payload["progress_total"], 37)
+        self.assertEqual(payload["progress_percent"], 32)
+        self.assertFalse(payload["terminal"])
+
+    def test_processing_status_endpoint_reports_no_job_and_terminal_failure(self):
+        self.client.force_login(self.user)
+
+        empty = self.client.get(self.status_url).json()
+        failed_job = self.create_job(
+            status=DocumentProcessingJob.Status.FAILED,
+            stage=DocumentProcessingJob.Stage.PARSE,
+            suffix="status-failed",
+        )
+        failed_job.provider_state = "failed"
+        failed_job.error_message = "Literature processing failed during parse."
+        failed_job.save(update_fields=("provider_state", "error_message", "updated_at"))
+        failed = self.client.get(self.status_url).json()
+
+        self.assertEqual(empty["status"], "not_queued")
+        self.assertTrue(empty["terminal"])
+        self.assertEqual(failed["job_id"], failed_job.pk)
+        self.assertEqual(failed["status"], "failed")
+        self.assertTrue(failed["failed"])
+        self.assertTrue(failed["terminal"])
+        self.assertEqual(failed["error_message"], "Literature processing failed during parse.")
 
     def test_completed_detail_shows_overview_parsed_text_and_pdf_page_evidence(self):
         job, document_parse, chunk, analysis = self.create_result()
@@ -150,12 +243,22 @@ class LiteratureDetailViewTests(TestCase):
         self.assertEqual(response.context["overview"], analysis)
         self.assertContains(response, "处理完成")
         self.assertContains(response, "Short overview.")
+        self.assertContains(response, "简短综述。")
         self.assertContains(response, "traceability")
         self.assertContains(response, "Traceable point.")
+        self.assertContains(response, 'data-overview-language="en"')
+        self.assertContains(response, 'data-overview-language="zh"')
+        self.assertContains(response, 'id="overview-panel-zh"')
+        self.assertContains(response, "PDF page 2")
         self.assertContains(response, evidence_url)
         self.assertContains(response, "PDF 第 2 页")
         self.assertContains(response, f'id="chunk-{chunk.pk}"')
         self.assertContains(response, "Evidence preserved from page two.")
+        self.assertContains(response, "Model")
+        self.assertContains(response, "vlm")
+        self.assertContains(response, "batch-test")
+        self.assertContains(response, "1-2")
+        self.assertContains(response, "Results")
 
     def test_latest_failure_does_not_hide_previous_successful_result(self):
         _, _, _, analysis = self.create_result("old")
@@ -172,6 +275,18 @@ class LiteratureDetailViewTests(TestCase):
         self.assertEqual(response.context["overview"], analysis)
         self.assertContains(response, "处理失败")
         self.assertContains(response, "Short overview.")
+
+    def test_legacy_single_language_overview_remains_visible_without_switch(self):
+        _, _, _, analysis = self.create_result("legacy")
+        analysis.schema_version = "plab.overview.v1"
+        analysis.payload.pop("chinese_translation")
+        analysis.save(update_fields=("schema_version", "payload"))
+        self.client.force_login(self.user)
+
+        response = self.client.get(self.url)
+
+        self.assertContains(response, "Short overview.")
+        self.assertNotContains(response, "data-overview-language")
 
     def test_library_links_to_processing_detail(self):
         self.client.force_login(self.user)

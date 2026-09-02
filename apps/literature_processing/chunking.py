@@ -20,6 +20,9 @@ class ChunkDraft:
     end_offset: int
     text: str
     content_sha256: str
+    end_page_number: int | None = None
+    section_path: tuple[str, ...] = ()
+    source_spans: tuple[dict[str, object], ...] = ()
 
 
 def chunk_document(
@@ -47,6 +50,7 @@ def chunk_document(
                     end_offset=end,
                     text=text,
                     content_sha256=content_sha256,
+                    end_page_number=page.number,
                 )
             )
             sequence += 1

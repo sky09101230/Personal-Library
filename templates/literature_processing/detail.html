@@ -23,32 +23,67 @@
     <p class="eyebrow">Processing</p>
     <h2 id="processing-title">处理状态</h2>
   </div>
-  <div class="processing-state">
-    <strong class="{% if processing_state.failed %}risk-text{% endif %}">{{ processing_state.label }}</strong>
-    <span>阶段：{{ processing_state.stage }}</span>
-    {% if latest_job %}<span>Pipeline：{{ latest_job.pipeline_version }}</span><span>更新：{{ latest_job.updated_at|date:"Y-m-d H:i" }}</span>{% endif %}
-    {% if processing_state.failed and latest_job.error_message %}<span class="risk-text">{{ latest_job.error_message }}</span>{% endif %}
+  <div
+    class="processing-state"
+    id="processing-live-state"
+    data-status-url="{% url 'literature-processing-status' literature.pk %}"
+    data-terminal="{% if processing_state.terminal %}true{% else %}false{% endif %}"
+  >
+    <strong id="processing-status-label" class="{% if processing_state.failed %}risk-text{% endif %}">{{ processing_state.label }}</strong>
+    <span id="processing-stage-label">阶段：{{ processing_state.stage }}</span>
+    {% if latest_job %}<span>Parser：{{ latest_job.parser_name }}</span><span>Pipeline：{{ latest_job.pipeline_version }}</span><span id="processing-updated">更新：{{ latest_job.updated_at|date:"Y-m-d H:i" }}</span>{% endif %}
+    <div class="processing-progress" id="processing-progress"{% if processing_state.progress_percent == None %} hidden{% endif %}>
+      <progress id="processing-progress-bar" max="100" value="{{ processing_state.progress_percent|default:0 }}"></progress>
+      <span id="processing-progress-label">{% if processing_state.progress_total %}{{ processing_state.progress_current }} / {{ processing_state.progress_total }}{% endif %}</span>
+    </div>
+    <span id="processing-error" class="risk-text">{% if processing_state.failed %}{{ processing_state.error_message }}{% endif %}</span>
   </div>
 </section>
 
 <div class="literature-result-grid">
   <section class="detail-section" aria-labelledby="overview-title">
-    <p class="eyebrow">Generated Analysis</p>
-    <h2 id="overview-title">AI Overview</h2>
     {% if overview %}
+      {% with translation=overview.payload.chinese_translation %}
+      <div class="overview-heading">
+        <div><p class="eyebrow">Generated Analysis</p><h2 id="overview-title">AI Overview</h2></div>
+        {% if translation %}
+        <div class="overview-language-switch" role="group" aria-label="AI Overview language">
+          <button type="button" class="active" data-overview-language="en" aria-controls="overview-panel-en" aria-pressed="true">English</button>
+          <button type="button" data-overview-language="zh" aria-controls="overview-panel-zh" aria-pressed="false">中文</button>
+        </div>
+        {% endif %}
+      </div>
+      <div id="overview-panel-en" class="overview-panel" data-overview-panel="en"{% if translation %} lang="en"{% endif %}>
       <p class="overview-short">{{ overview.payload.summary_short }}</p>
       <p class="overview-summary">{{ overview.payload.summary }}</p>
-      {% if overview.payload.topics %}<div class="topic-list" aria-label="主题">{% for topic in overview.payload.topics %}<span class="tag">{{ topic }}</span>{% endfor %}</div>{% endif %}
+      {% if overview.payload.topics %}<div class="topic-list" aria-label="{% if translation %}Topics{% else %}主题{% endif %}">{% for topic in overview.payload.topics %}<span class="tag">{{ topic }}</span>{% endfor %}</div>{% endif %}
       <ol class="key-point-list">
         {% for point in overview.payload.key_points %}
         <li>
           <p>{{ point.text }}</p>
-          <div class="evidence-links">{% for evidence in point.evidence %}{% if source_upload %}<a href="{% url 'view-document' source_upload.pk %}#page={{ evidence.page }}" target="_blank" rel="noopener">PDF 第 {{ evidence.page }} 页</a>{% endif %}<a href="#chunk-{{ evidence.chunk_id }}">片段 {{ evidence.chunk_id }}</a>{% endfor %}</div>
+          <div class="evidence-links">{% for evidence in point.evidence %}{% if source_upload %}<a href="{% url 'view-document' source_upload.pk %}#page={{ evidence.page }}" target="_blank" rel="noopener">{% if translation %}PDF page {{ evidence.page }}{% else %}PDF 第 {{ evidence.page }} 页{% endif %}</a>{% endif %}<a href="#chunk-{{ evidence.chunk_id }}">{% if translation %}Chunk {{ evidence.chunk_id }}{% else %}片段 {{ evidence.chunk_id }}{% endif %}</a>{% endfor %}</div>
         </li>
         {% endfor %}
       </ol>
+      </div>
+      {% if translation %}
+      <div id="overview-panel-zh" class="overview-panel" data-overview-panel="zh" lang="zh-Hans" hidden>
+        <p class="overview-short">{{ translation.summary_short }}</p>
+        <p class="overview-summary">{{ translation.summary }}</p>
+        {% if translation.topics %}<div class="topic-list" aria-label="主题">{% for topic in translation.topics %}<span class="tag">{{ topic }}</span>{% endfor %}</div>{% endif %}
+        <ol class="key-point-list">
+          {% for point in translation.key_points %}
+          <li>
+            <p>{{ point.text }}</p>
+            <div class="evidence-links">{% for evidence in point.evidence %}{% if source_upload %}<a href="{% url 'view-document' source_upload.pk %}#page={{ evidence.page }}" target="_blank" rel="noopener">PDF 第 {{ evidence.page }} 页</a>{% endif %}<a href="#chunk-{{ evidence.chunk_id }}">片段 {{ evidence.chunk_id }}</a>{% endfor %}</div>
+          </li>
+          {% endfor %}
+        </ol>
+      </div>
+      {% endif %}
       <p class="analysis-provenance">{{ overview.provider }} · {{ overview.model }} · {{ overview.prompt_version }}</p>
-    {% else %}<p class="subtle">暂无 AI Overview。</p>{% endif %}
+      {% endwith %}
+    {% else %}<p class="eyebrow">Generated Analysis</p><h2 id="overview-title">AI Overview</h2><p class="subtle">暂无 AI Overview。</p>{% endif %}
   </section>
 
   <aside class="detail-section parse-facts" aria-labelledby="parse-title">
@@ -59,6 +94,10 @@
         <dt>Parser</dt><dd>{{ result_parse.parser_name }} {{ result_parse.parser_version }}</dd>
         <dt>页数</dt><dd>{{ result_parse.page_count }}</dd>
         <dt>Schema</dt><dd>{{ result_parse.schema_version }}</dd>
+        {% if result_parse.runtime_info.model_version %}<dt>Model</dt><dd>{{ result_parse.runtime_info.model_version }}</dd>{% endif %}
+        {% if result_parse.runtime_info.batch_id %}<dt>Batch</dt><dd>{{ result_parse.runtime_info.batch_id }}</dd>{% endif %}
+        {% if result_parse.runtime_info.page_ranges %}<dt>Page ranges</dt><dd>{{ result_parse.runtime_info.page_ranges|join:", " }}</dd>{% endif %}
+        {% if result_parse.raw_artifact_sha256 %}<dt>Raw artifact</dt><dd>{{ result_parse.raw_artifact_sha256|slice:":12" }}…</dd>{% endif %}
         <dt>Artifact</dt><dd>{{ result_parse.artifact_sha256|slice:":12" }}…</dd>
       </dl>
       {% if result_parse.warnings %}<ul class="parse-warnings">{% for warning in result_parse.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>{% endif %}
@@ -73,9 +112,68 @@
     <details class="parsed-page"{% if forloop.first %} open{% endif %}>
       <summary><span>第 {{ page.number }} 页</span><span>{{ page.chunks|length }} 个片段</span></summary>
       <div class="page-chunks">
-        {% for chunk in page.chunks %}<article id="chunk-{{ chunk.pk }}" class="parsed-chunk"><div class="chunk-meta">{{ chunk.chunk_key }}</div><p>{{ chunk.text }}</p></article>{% endfor %}
+        {% for chunk in page.chunks %}<article id="chunk-{{ chunk.pk }}" class="parsed-chunk"><div class="chunk-meta">{{ chunk.chunk_key }}{% if chunk.end_page_number and chunk.end_page_number != chunk.page_number %} · 页 {{ chunk.page_number }}–{{ chunk.end_page_number }}{% endif %}{% if chunk.section_path %} · {{ chunk.section_path|join:" / " }}{% endif %}</div><p>{{ chunk.text }}</p></article>{% endfor %}
       </div>
     </details>
   {% empty %}<p class="subtle">暂无解析文本。</p>{% endfor %}
 </section>
+{% if overview.payload.chinese_translation %}
+<script>
+(() => {
+  const buttons = document.querySelectorAll("[data-overview-language]");
+  const panels = document.querySelectorAll("[data-overview-panel]");
+  buttons.forEach((button) => button.addEventListener("click", () => {
+    const language = button.dataset.overviewLanguage;
+    buttons.forEach((item) => {
+      const active = item === button;
+      item.classList.toggle("active", active);
+      item.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    panels.forEach((panel) => { panel.hidden = panel.dataset.overviewPanel !== language; });
+  }));
+})();
+</script>
+{% endif %}
+{% if latest_job and not processing_state.terminal %}
+<script>
+(() => {
+  const root = document.getElementById("processing-live-state");
+  const statusLabel = document.getElementById("processing-status-label");
+  const stageLabel = document.getElementById("processing-stage-label");
+  const progress = document.getElementById("processing-progress");
+  const progressBar = document.getElementById("processing-progress-bar");
+  const progressLabel = document.getElementById("processing-progress-label");
+  const errorLabel = document.getElementById("processing-error");
+  let timer = null;
+
+  const unitLabel = (unit) => unit === "pages" ? "页" : unit === "segments" ? "分段" : "";
+  const refresh = async () => {
+    try {
+      const response = await fetch(root.dataset.statusUrl, {credentials: "same-origin", cache: "no-store"});
+      if (!response.ok) return;
+      const state = await response.json();
+      statusLabel.textContent = state.label;
+      statusLabel.classList.toggle("risk-text", state.failed);
+      stageLabel.textContent = `阶段：${state.stage}`;
+      errorLabel.textContent = state.error_message || "";
+      if (state.progress_percent !== null) {
+        progress.hidden = false;
+        progressBar.value = state.progress_percent;
+        progressLabel.textContent = `${state.progress_current} / ${state.progress_total} ${unitLabel(state.progress_unit)} (${state.progress_percent}%)`;
+      } else {
+        progress.hidden = true;
+      }
+      if (state.terminal) {
+        clearInterval(timer);
+        if (state.status === "succeeded") window.location.reload();
+      }
+    } catch (_) {
+      return;
+    }
+  };
+  timer = setInterval(refresh, 2000);
+  refresh();
+})();
+</script>
+{% endif %}
 {% endblock %}
