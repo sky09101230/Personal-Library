@@ -11,6 +11,7 @@ from django.contrib import admin
 from django.contrib.auth.models import User
 from django.db import IntegrityError, transaction
 from django.test import TestCase, override_settings
+from django.utils.http import content_disposition_header
 
 from .services import (
     LiteratureStorageError,
@@ -662,7 +663,12 @@ class UploadPageTests(TestCase):
 
     @patch("apps.box_upload.views.open_literature_stream")
     def test_download_is_proxied_as_attachment(self, open_stream):
-        canonical = CanonicalDocument.objects.create(sha256="b" * 64)
+        canonical = CanonicalDocument.objects.create(
+            sha256="b" * 64,
+            journal="Laser / Photonics: Reviews",
+            publication_year=2026,
+            title="Dynamic Vectorial Holographic Display?",
+        )
         document = UploadedDocument.objects.create(
             canonical_document=canonical,
             uploader=self.user,
@@ -681,8 +687,39 @@ class UploadPageTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(b"".join(response.streaming_content), b"pdf")
-        self.assertTrue(response["Content-Disposition"].startswith("attachment"))
+        self.assertEqual(
+            response["Content-Disposition"],
+            content_disposition_header(
+                True,
+                "Laser Photonics Reviews 2026 Dynamic Vectorial Holographic Display.pdf",
+            ),
+        )
         open_stream.assert_called_once_with(document, byte_range=None)
+
+    @patch("apps.box_upload.views.open_literature_stream")
+    def test_download_filename_is_bounded_for_long_titles(self, open_stream):
+        document = UploadedDocument.objects.create(
+            canonical_document=CanonicalDocument.objects.create(
+                sha256="c" * 64,
+                title="A" * 500,
+            ),
+            uploader=self.user,
+            original_name="paper.pdf",
+            remote_path="/paper.pdf",
+            sha256="c" * 64,
+            size=1,
+        )
+        upstream = MagicMock(status=200)
+        upstream.iter_chunks.return_value = iter((b"pdf",))
+        upstream.get_header.return_value = None
+        open_stream.return_value = upstream
+
+        response = self.client.get(f"/library/download/{document.pk}/")
+
+        self.assertEqual(
+            response["Content-Disposition"],
+            content_disposition_header(True, f"{'A' * 236}.pdf"),
+        )
 
     @patch("apps.box_upload.views.open_literature_stream")
     def test_inline_pdf_forwards_range_and_security_headers(self, open_stream):
@@ -712,7 +749,10 @@ class UploadPageTests(TestCase):
         self.assertEqual(response.status_code, 206)
         self.assertEqual(b"".join(response.streaming_content), b"%PDF-1.7")
         self.assertEqual(response["Content-Type"], "application/pdf")
-        self.assertTrue(response["Content-Disposition"].startswith("inline"))
+        self.assertEqual(
+            response["Content-Disposition"],
+            content_disposition_header(False, "文献.pdf"),
+        )
         self.assertEqual(response["Content-Range"], "bytes 0-7/100")
         self.assertEqual(response["Cache-Control"], "private, no-store")
         self.assertEqual(response["X-Content-Type-Options"], "nosniff")

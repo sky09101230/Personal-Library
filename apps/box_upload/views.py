@@ -41,6 +41,23 @@ from .zotero import (
 
 
 _SINGLE_BYTE_RANGE = re.compile(r"^bytes=(?:\d+-\d*|-\d+)$")
+_INVALID_DOWNLOAD_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_DOWNLOAD_FILENAME_MAX_LENGTH = 240
+
+
+def _literature_download_filename(document):
+    canonical = document.canonical_document
+    stem = " ".join(
+        str(value).strip()
+        for value in (canonical.journal, canonical.publication_year, canonical.title)
+        if value is not None and str(value).strip()
+    )
+    stem = _INVALID_DOWNLOAD_FILENAME_CHARS.sub(" ", stem)
+    stem = " ".join(stem.split()).strip(" .") or "文献"
+    stem = stem[: _DOWNLOAD_FILENAME_MAX_LENGTH - len(".pdf")].rstrip(" .") or "文献"
+    return f"{stem}.pdf"
+
+
 def _proposal_form_values(proposed):
     proposed = proposed or {}
     return {
@@ -854,7 +871,10 @@ def _stream_document_request(request, document, *, as_attachment):
         status=upstream.status,
         content_type="application/pdf",
     )
-    response["Content-Disposition"] = content_disposition_header(as_attachment, document.original_name)
+    response["Content-Disposition"] = content_disposition_header(
+        as_attachment,
+        _literature_download_filename(document),
+    )
     response["Accept-Ranges"] = upstream.get_header("Accept-Ranges") or "bytes"
     for header in ("Content-Length", "Content-Range", "ETag", "Last-Modified"):
         value = upstream.get_header(header)
