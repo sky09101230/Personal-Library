@@ -135,4 +135,4 @@ def _system_prompt():
     ]
   }
 }
-The Chinese translation must preserve the order and number of topics and key points. Each translated key point must repeat the exact evidence list from its English counterpart. Every key point must cite at least one supplied chunk_id and its exact page. Output JSON only."""
+The English summary_short must be one sentence containing at most 60 English words and no more than 500 characters, including spaces and punctuation. Its Simplified Chinese translation must also be one sentence containing no more than 500 characters. The Chinese translation must preserve the order and number of topics and key points. Each translated key point must repeat the exact evidence list from its English counterpart. Every key point must cite at least one supplied chunk_id and its exact page. Output JSON only."""

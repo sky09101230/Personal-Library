@@ -163,6 +163,13 @@ class OverviewValidationTests(OverviewTestDataMixin, TestCase):
         with self.assertRaises(ValidationError):
             self.create_analysis(payload)
 
+    def test_summary_short_reports_length_limit(self):
+        payload = overview_payload(self.chunk)
+        payload["summary_short"] = "x" * 501
+
+        with self.assertRaisesMessage(ValidationError, "must contain at most 500 characters"):
+            self.create_analysis(payload)
+
 
 class OverviewProviderTests(OverviewTestDataMixin, TestCase):
     @patch.dict(
@@ -193,6 +200,7 @@ class OverviewProviderTests(OverviewTestDataMixin, TestCase):
         self.assertEqual(calls[0][1]["response_format"], {"type": "json_object"})
         self.assertEqual(calls[0][1]["max_tokens"], 8192)
         self.assertIn("Write the literature overview in English first", calls[0][1]["messages"][0]["content"])
+        self.assertIn("summary_short must be one sentence containing at most 60 English words", calls[0][1]["messages"][0]["content"])
         self.assertIn('"chinese_translation"', calls[0][1]["messages"][0]["content"])
         self.assertEqual(calls[0][2], "test-key")
         self.assertEqual(analysis.provider, "deepseek")
