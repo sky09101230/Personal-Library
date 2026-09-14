@@ -5,3 +5,4 @@ bibtexparser==1.4.4
 whitenoise==6.12.0
 cryptography==50.0.0
 psycopg[binary]==3.3.4
+Pygments==2.21.0

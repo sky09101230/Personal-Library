@@ -15,6 +15,8 @@ import json
 import subprocess
 import zipfile
 
+from apps.box_upload.services import LiteratureStorageError
+
 from .ai_enrichment import SkillEnrichmentError, generate_skill_enrichment
 from .models import FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillInstall, SkillPurpose, SkillSyncJob
 from .downloads import build_skill_download_url
@@ -86,7 +88,8 @@ class SkillsPageTests(TestCase):
         self.assertContains(response, "文献工作")
         self.assertContains(response, "文献提取")
         self.assertContains(response, "文献筛选")
-        self.assertContains(response, "来源：PLAB Shared Skills")
+        self.assertContains(response, "PLAB Shared Skills")
+        self.assertContains(response, 'href="https://github.com/example/plab-skills.git"')
         self.assertContains(response, "/skills/plab-shared-skills/pdf2md/")
         self.assertContains(response, "/skills/plab-shared-skills/literature-filter/")
 
@@ -136,10 +139,48 @@ class SkillsPageTests(TestCase):
         self.assertNotContains(response, "Uncategorized 24")
         self.assertContains(response, "category=uncategorized&page=2")
 
-    def test_skills_detail_shows_latest_release(self):
+    @patch("apps.skills.previews.open_skill_stream")
+    def test_skills_detail_shows_latest_release_and_file_preview(self, open_stream):
+        archive = BytesIO()
+        with zipfile.ZipFile(archive, "w") as package:
+            package.writestr("SKILL.md", "# PDF to Markdown\n")
+            package.writestr("scripts/convert.py", "print('ok')\n")
+        upstream = MagicMock(status=200)
+        upstream.iter_chunks.side_effect = lambda: iter((archive.getvalue(),))
+        open_stream.return_value = upstream
+
         response = self.client.get("/skills/plab-shared-skills/pdf2md/")
 
         self.assertContains(response, "pdf2md-aaaaaaaaaaaa.zip")
+        self.assertContains(response, "SKILL.md")
+        self.assertContains(response, "scripts/convert.py")
+
+        code_response = self.client.get("/skills/plab-shared-skills/pdf2md/?file=scripts/convert.py")
+        self.assertContains(code_response, "print")
+        self.assertContains(code_response, "Python")
+
+    @patch("apps.skills.previews.open_skill_stream", side_effect=LiteratureStorageError("unavailable"))
+    def test_skills_detail_handles_preview_storage_failure(self, open_stream):
+        response = self.client.get("/skills/plab-shared-skills/pdf2md/")
+
+        self.assertContains(response, "暂时无法读取该 Skill 的文件预览。")
+
+    @patch("apps.skills.previews.open_skill_stream")
+    def test_skills_detail_does_not_preview_binary_or_oversized_files(self, open_stream):
+        archive = BytesIO()
+        with zipfile.ZipFile(archive, "w") as package:
+            package.writestr("SKILL.md", "# PDF to Markdown\n")
+            package.writestr("assets/data.bin", b"\x00\x01")
+            package.writestr("references/large.txt", "x" * (256 * 1024 + 1))
+        upstream = MagicMock(status=200)
+        upstream.iter_chunks.side_effect = lambda: iter((archive.getvalue(),))
+        open_stream.return_value = upstream
+
+        binary_response = self.client.get("/skills/plab-shared-skills/pdf2md/?file=assets/data.bin")
+        large_response = self.client.get("/skills/plab-shared-skills/pdf2md/?file=references/large.txt")
+
+        self.assertContains(binary_response, "二进制文件不支持在线预览。")
+        self.assertContains(large_response, "文件超过 256 KiB 预览上限。")
 
     def test_non_staff_cannot_trigger_sync(self):
         response = self.client.post("/skills/sync/")

@@ -25,6 +25,7 @@ from .github_search import (
     upsert_github_skill_source,
 )
 from .models import AcademicSkillRecommendation, FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillCandidate, SkillInstall, SkillPurpose
+from .previews import build_release_preview
 from .services import get_or_create_skill_job, mark_job_failed
 from .storage import open_skill_stream
 from .tasks import launch_academic_recommendations_job, launch_enrichment_job, launch_scan_job
@@ -396,7 +397,8 @@ def detail(request, slug, source_slug=None):
         if skill is None:
             raise Http404
     release = _preferred_release(skill)
-    return render(request, "skills/detail.html", {"skill": skill, "release": release})
+    preview = build_release_preview(release, request.GET.get("file", ""))
+    return render(request, "skills/detail.html", {"skill": skill, "release": release, "preview": preview})
 
 
 def _redirect_to_skill(skill):
