@@ -243,12 +243,12 @@ class SkillLibraryTests(TestCase):
 
     def test_discover_and_detail_expose_install_state(self):
         discover_response = self.client.get(reverse("skills-index"))
-        self.assertContains(discover_response, "安装到我的 Skills")
+        self.assertContains(discover_response, "添加到我的 Skills")
 
         self.client.post(reverse("skills-install", args=[self.skill.pk]))
         detail_response = self.client.get(reverse("skills-detail", args=[self.skill.slug]))
 
-        self.assertContains(detail_response, "已安装 · 已启用")
+        self.assertContains(detail_response, "已添加 · 已启用")
         self.assertContains(detail_response, "从我的 Skills 移除")
 
     def test_my_skills_only_shows_current_user_and_can_toggle_and_remove(self):

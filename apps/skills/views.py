@@ -353,7 +353,7 @@ def install(request, skill_id):
     if not created and not installation.enabled:
         installation.enabled = True
         installation.save(update_fields=["enabled", "updated_at"])
-    messages.success(request, f"已安装 {skill.name}。")
+    messages.success(request, f"已添加 {skill.name}。")
     return _redirect_to_skill(skill)
 
 
