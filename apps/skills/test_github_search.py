@@ -171,6 +171,45 @@ class GitHubSearchTests(TestCase):
         self.assertEqual(request_json.call_args_list[2].args[1], {"ref": "a" * 40})
 
     @patch("apps.skills.github_search._request_json")
+    def test_import_accepts_explicit_cc_by_nc_sa_license_text(self, request_json):
+        license_text = (
+            "Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International "
+            "(CC BY-NC-SA 4.0)"
+        )
+        request_json.side_effect = [
+            {"private": False, "default_branch": "main", "full_name": "example/research"},
+            {"sha": "a" * 40},
+            {"type": "file", "path": "skills/paper/SKILL.md"},
+            {
+                "path": "LICENSE",
+                "encoding": "base64",
+                "content": base64.b64encode(license_text.encode()).decode(),
+                "license": {"spdx_id": "NOASSERTION"},
+            },
+        ]
+
+        result = inspect_github_skill_for_import("example", "research", "skills/paper/SKILL.md")
+
+        self.assertEqual(result["license_spdx"], "CC-BY-NC-SA-4.0")
+
+    @patch("apps.skills.github_search._request_json")
+    def test_import_rejects_unrecognized_noassertion_license_text(self, request_json):
+        request_json.side_effect = [
+            {"private": False, "default_branch": "main", "full_name": "example/research"},
+            {"sha": "a" * 40},
+            {"type": "file", "path": "skills/paper/SKILL.md"},
+            {
+                "path": "LICENSE",
+                "encoding": "base64",
+                "content": base64.b64encode(b"Unknown custom license").decode(),
+                "license": {"spdx_id": "NOASSERTION"},
+            },
+        ]
+
+        with self.assertRaisesMessage(GitHubSearchError, "许可证不明确"):
+            inspect_github_skill_for_import("example", "research", "skills/paper/SKILL.md")
+
+    @patch("apps.skills.github_search._request_json")
     def test_import_rejects_untrusted_path_before_github_request(self, request_json):
         with self.assertRaisesMessage(GitHubSearchError, "路径无效"):
             inspect_github_skill_for_import("example", "research", "../SKILL.md")

@@ -28,7 +28,7 @@ ALLOWED_HOSTS = [
     host.strip()
     for host in (
         os.environ.get("ALLOWED_HOSTS")
-        or "localhost,127.0.0.1,propose-reduction-units-confidentiality.trycloudflare.com"
+        or "localhost,127.0.0.1, images-submitting-exterior-citizens.trycloudflare.com"
     ).split(",")
     if host.strip()
 ]

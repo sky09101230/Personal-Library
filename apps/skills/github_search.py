@@ -37,6 +37,9 @@ DISCOVERY_FAILURE_CACHE_SECONDS = 60
 DISCOVERY_LOCK_SECONDS = 180
 MAX_DISCOVERY_BLOB_BYTES = 524288
 REPOSITORY_PART_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,100}\Z")
+LICENSE_TEXT_SIGNATURES = {
+    "creative commons attribution-noncommercial-sharealike 4.0 international": "CC-BY-NC-SA-4.0",
+}
 
 
 class GitHubSearchError(Exception):
@@ -360,9 +363,8 @@ def inspect_github_skill_for_import(owner, repository, skill_path):
         {"ref": commit},
         not_found_message="该仓库没有 GitHub 可识别的许可证，只能查看，不能导入候选池。",
     )
-    license_info = license_data.get("license") or {}
-    license_spdx = str(license_info.get("spdx_id") or "").strip()
-    if not license_spdx or license_spdx.upper() == "NOASSERTION":
+    license_spdx = _license_spdx_id(license_data)
+    if not license_spdx:
         raise GitHubSearchError("该仓库的许可证不明确，只能查看，不能导入候选池。")
     license_path = _safe_github_path(license_data.get("path", ""))
     full_name = f"{owner}/{repository}"
@@ -378,6 +380,27 @@ def inspect_github_skill_for_import(owner, repository, skill_path):
         "license_path": license_path,
         "license_spdx": license_spdx,
     }
+
+
+def _license_spdx_id(license_data):
+    license_info = license_data.get("license") or {}
+    license_spdx = str(license_info.get("spdx_id") or "").strip()
+    if license_spdx and license_spdx.upper() != "NOASSERTION":
+        return license_spdx
+    if license_data.get("encoding") != "base64":
+        return ""
+    try:
+        encoded = "".join(str(license_data.get("content") or "").split())
+        raw = base64.b64decode(encoded, validate=True)
+        if len(raw) > MAX_DISCOVERY_BLOB_BYTES:
+            return ""
+        license_text = raw.decode("utf-8-sig").casefold()
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return ""
+    for signature, spdx_id in LICENSE_TEXT_SIGNATURES.items():
+        if signature in license_text:
+            return spdx_id
+    return ""
 
 
 def upsert_github_skill_source(selection):

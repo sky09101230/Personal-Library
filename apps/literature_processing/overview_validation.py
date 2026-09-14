@@ -85,8 +85,10 @@ def _validate_topics(topics, *, field_prefix=""):
 
 
 def _require_text(value, field_name, *, max_length):
-    if not isinstance(value, str) or not value.strip() or len(value) > max_length:
+    if not isinstance(value, str) or not value.strip():
         raise ValidationError({"payload": f"Overview {field_name} must be non-empty text."})
+    if len(value) > max_length:
+        raise ValidationError({"payload": f"Overview {field_name} must contain at most {max_length} characters."})
 
 
 def _is_integer(value):

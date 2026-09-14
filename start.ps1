@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$BindAddress = "127.0.0.1",
+    [string]$BindAddress = "0.0.0.0",
     [ValidateRange(1, 65535)]
     [int]$Port = 8000
 )

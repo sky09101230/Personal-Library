@@ -1,12 +1,13 @@
 import logging
 
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Exists, OuterRef
+from django.db.models import Count, Exists, OuterRef, Q
 
 from apps.box_upload.models import UploadedDocument
 
-from .models import DocumentProcessingJob
-from .versions import DEFAULT_PARSER_NAME, current_versions, versions_for
+from .models import DocumentAnalysis, DocumentProcessingJob
+from .overview import OVERVIEW_SCHEMA_VERSION
+from .versions import DEFAULT_PARSER_NAME, PROMPT_VERSION, current_versions, versions_for
 
 
 logger = logging.getLogger(__name__)
@@ -129,6 +130,23 @@ def processing_status():
         status=UploadedDocument.Status.UPLOADED,
         file_role=UploadedDocument.FileRole.PRIMARY,
     )
+    successful_overviews = DocumentAnalysis.objects.filter(
+        analysis_type=DocumentAnalysis.AnalysisType.OVERVIEW,
+        document_parse__job__uploaded_document_id=OuterRef("pk"),
+        document_parse__job__status=DocumentProcessingJob.Status.SUCCEEDED,
+    )
+    overview_counts = uploads.annotate(
+        has_v2=Exists(successful_overviews.filter(
+            schema_version=OVERVIEW_SCHEMA_VERSION,
+            prompt_version=PROMPT_VERSION,
+        )),
+        has_v1=Exists(successful_overviews.filter(schema_version="plab.overview.v1")),
+    ).aggregate(
+        total=Count("pk"),
+        v2=Count("pk", filter=Q(has_v2=True)),
+        v1_only=Count("pk", filter=Q(has_v2=False, has_v1=True)),
+        unprocessed=Count("pk", filter=Q(has_v2=False, has_v1=False)),
+    )
     covered = DocumentProcessingJob.objects.filter(
         uploaded_document_id=OuterRef("pk"),
         status__in=(*ACTIVE_STATUSES, DocumentProcessingJob.Status.SUCCEEDED),
@@ -149,8 +167,13 @@ def processing_status():
         for lane in DocumentProcessingJob.QueueLane.values
     }
     return {
-        "uploads": uploads.count(),
+        "uploads": overview_counts["total"],
         "uncovered": uploads.annotate(is_covered=Exists(covered)).filter(is_covered=False).count(),
+        "overview": {
+            "v2": overview_counts["v2"],
+            "v1_only": overview_counts["v1_only"],
+            "unprocessed": overview_counts["unprocessed"],
+        },
         "jobs": {
             status: job_counts.get(status, 0)
             for status in (

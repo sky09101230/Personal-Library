@@ -3,6 +3,7 @@ from urllib.parse import urlsplit
 
 from django.contrib.auth.models import User
 from django.test import TestCase, override_settings
+from django.utils.http import content_disposition_header
 
 from .downloads import build_literature_download_url
 from .models import CanonicalDocument, UploadedDocument
@@ -17,6 +18,9 @@ class SignedLiteratureDownloadTests(TestCase):
         self.user = User.objects.create_user(username="download-owner", password="Strong-pass-1234")
         self.canonical = CanonicalDocument.objects.create(
             sha256="f" * 64,
+            title="可重构超表面",
+            journal="光学学报",
+            publication_year=2026,
             index_status=CanonicalDocument.IndexStatus.PUBLISHED,
         )
         self.document = UploadedDocument.objects.create(
@@ -42,7 +46,10 @@ class SignedLiteratureDownloadTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(b"".join(response.streaming_content), b"%PDF-1.7")
-        self.assertTrue(response["Content-Disposition"].startswith("attachment"))
+        self.assertEqual(
+            response["Content-Disposition"],
+            content_disposition_header(True, "光学学报 2026 可重构超表面.pdf"),
+        )
         open_stream.assert_called_once()
         self.assertEqual(open_stream.call_args.args[0].pk, self.document.pk)
 
