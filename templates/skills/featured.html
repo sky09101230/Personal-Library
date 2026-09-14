@@ -2,6 +2,6 @@
 {% block title %}管理员精选 | PLAB Skills{% endblock %}
 {% block content %}
 <div class="page-head"><p class="eyebrow">PLAB Curated Skills</p><h1>管理员精选</h1><p class="subtle">来自管理员实际使用后的推荐。</p></div>
-<nav class="skills-subnav" aria-label="Skills 导航"><a href="{% url 'skills-index' %}">全部 Skills</a><a class="active" href="{% url 'skills-featured' %}">管理员精选</a></nav>
+<nav class="skills-subnav" aria-label="Skills 导航"><a href="{% url 'skills-index' %}">Discover</a><a href="{% url 'skills-library' %}">My Skills</a><a class="active" href="{% url 'skills-featured' %}">管理员精选</a></nav>
 <div class="skill-card-grid">{% for entry in entries %}<article class="skill-card featured-skill-card"><div><h3>{{ entry.skill.name }}</h3><p class="featured-note">{{ entry.recommendation }}</p><p>{{ entry.skill.description|default:"No description provided." }}</p></div><div class="skill-card-meta">{% if entry.skill.purpose %}<span>{{ entry.skill.purpose }}</span>{% endif %}<code>{{ entry.skill.last_synced_commit|slice:":12" }}</code></div>{% if entry.skill.source %}<a class="download-link" href="{% url 'skills-source-detail' entry.skill.source.slug entry.skill.slug %}">查看详情</a>{% else %}<a class="download-link" href="{% url 'skills-detail' entry.skill.slug %}">查看详情</a>{% endif %}</article>{% empty %}<div class="panel"><p class="subtle">管理员尚未添加精选 Skill。</p></div>{% endfor %}</div>
 {% endblock %}

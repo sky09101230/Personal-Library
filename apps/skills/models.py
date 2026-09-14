@@ -138,6 +138,23 @@ class SharedSkill(models.Model):
         return self.name
 
 
+class SkillInstall(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="skill_installs")
+    skill = models.ForeignKey(SharedSkill, on_delete=models.CASCADE, related_name="installations")
+    enabled = models.BooleanField(default=True)
+    installed_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-updated_at", "skill__name")
+        constraints = [
+            models.UniqueConstraint(fields=("user", "skill"), name="unique_user_skill_install"),
+        ]
+
+    def __str__(self):
+        return f"{self.user.username}: {self.skill.name}"
+
+
 class FeaturedSkill(models.Model):
     skill = models.OneToOneField(SharedSkill, on_delete=models.CASCADE, related_name="featured_entry")
     recommendation = models.CharField(max_length=240)

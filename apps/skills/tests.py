@@ -3,6 +3,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
+from django.urls import reverse
 from django.utils import timezone
 from datetime import timedelta
 from io import BytesIO
@@ -15,7 +16,7 @@ import subprocess
 import zipfile
 
 from .ai_enrichment import SkillEnrichmentError, generate_skill_enrichment
-from .models import FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillPurpose, SkillSyncJob
+from .models import FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillInstall, SkillPurpose, SkillSyncJob
 from .downloads import build_skill_download_url
 from .services import (
     InactiveSkillJob,
@@ -203,6 +204,85 @@ class SkillsPageTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(b"".join(response.streaming_content), b"zip")
+
+
+class SkillLibraryTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="member", password="Strong-pass-1234")
+        self.other_user = User.objects.create_user(username="other", password="Strong-pass-1234")
+        self.client.force_login(self.user)
+        self.skill = SharedSkill.objects.create(
+            slug="pdf2md",
+            name="PDF to Markdown",
+            description="Convert academic PDFs to Markdown.",
+            source_path="skills/pdf2md",
+            last_synced_commit="a" * 40,
+        )
+
+    def test_my_skills_requires_login(self):
+        self.client.logout()
+
+        response = self.client.get(reverse("skills-library"))
+
+        self.assertRedirects(response, "/accounts/login/?next=/skills/my/")
+
+    def test_install_is_idempotent_and_reenables(self):
+        SkillInstall.objects.create(user=self.user, skill=self.skill, enabled=False)
+
+        response = self.client.post(reverse("skills-install", args=[self.skill.pk]))
+
+        self.assertRedirects(response, reverse("skills-detail", args=[self.skill.slug]))
+        self.assertEqual(SkillInstall.objects.filter(user=self.user, skill=self.skill).count(), 1)
+        self.assertTrue(SkillInstall.objects.get(user=self.user, skill=self.skill).enabled)
+
+    def test_unknown_skill_cannot_be_installed(self):
+        response = self.client.post(reverse("skills-install", args=[999999]))
+
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(SkillInstall.objects.filter(user=self.user).exists())
+
+    def test_discover_and_detail_expose_install_state(self):
+        discover_response = self.client.get(reverse("skills-index"))
+        self.assertContains(discover_response, "安装到我的 Skills")
+
+        self.client.post(reverse("skills-install", args=[self.skill.pk]))
+        detail_response = self.client.get(reverse("skills-detail", args=[self.skill.slug]))
+
+        self.assertContains(detail_response, "已安装 · 已启用")
+        self.assertContains(detail_response, "从我的 Skills 移除")
+
+    def test_my_skills_only_shows_current_user_and_can_toggle_and_remove(self):
+        installation = SkillInstall.objects.create(user=self.user, skill=self.skill)
+        SkillInstall.objects.create(user=self.other_user, skill=self.skill)
+
+        response = self.client.get(reverse("skills-library"))
+        self.assertContains(response, "PDF to Markdown")
+        self.assertContains(response, "停用")
+
+        toggle_response = self.client.post(
+            reverse("skills-set-enabled", args=[self.skill.pk]),
+            {"enabled": "0"},
+        )
+        self.assertRedirects(toggle_response, reverse("skills-library"))
+        installation.refresh_from_db()
+        self.assertFalse(installation.enabled)
+        self.assertTrue(SkillInstall.objects.get(user=self.other_user, skill=self.skill).enabled)
+
+        remove_response = self.client.post(reverse("skills-uninstall", args=[self.skill.pk]))
+        self.assertRedirects(remove_response, reverse("skills-detail", args=[self.skill.slug]))
+        self.assertFalse(SkillInstall.objects.filter(user=self.user, skill=self.skill).exists())
+        self.assertTrue(SkillInstall.objects.filter(user=self.other_user, skill=self.skill).exists())
+
+    def test_user_cannot_toggle_other_users_installation(self):
+        SkillInstall.objects.create(user=self.other_user, skill=self.skill)
+
+        response = self.client.post(
+            reverse("skills-set-enabled", args=[self.skill.pk]),
+            {"enabled": "0"},
+        )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(SkillInstall.objects.get(user=self.other_user, skill=self.skill).enabled)
 
 
 class SkillSyncTests(TestCase):

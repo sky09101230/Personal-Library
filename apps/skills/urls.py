@@ -5,6 +5,7 @@ from . import views
 
 urlpatterns = [
     path("", views.index, name="skills-index"),
+    path("my/", views.my_skills, name="skills-library"),
     path("featured/", views.featured, name="skills-featured"),
     path("discover/github/", views.discover_github, name="skills-discover-github"),
     path("discover/github/import/", views.import_github_candidate, name="skills-import-github"),
@@ -15,6 +16,9 @@ urlpatterns = [
     path("candidates/publish/", views.batch_publish_candidates, name="skills-candidates-batch-publish"),
     path("candidates/<int:candidate_id>/", views.candidate_detail, name="skills-candidate-detail"),
     path("candidates/<int:candidate_id>/review/", views.review_candidate, name="skills-candidate-review"),
+    path("install/<int:skill_id>/", views.install, name="skills-install"),
+    path("install/<int:skill_id>/remove/", views.uninstall, name="skills-uninstall"),
+    path("install/<int:skill_id>/enabled/", views.set_enabled, name="skills-set-enabled"),
     path("sync/", views.sync, name="skills-sync"),
     path("enrich/", views.enrich, name="skills-enrich"),
     path("sync/<int:job_id>/status/", views.sync_status, name="skills-sync-status"),

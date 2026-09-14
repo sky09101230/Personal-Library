@@ -24,7 +24,7 @@ from .github_search import (
     summarize_github_search_items,
     upsert_github_skill_source,
 )
-from .models import AcademicSkillRecommendation, FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillCandidate, SkillPurpose
+from .models import AcademicSkillRecommendation, FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillCandidate, SkillInstall, SkillPurpose
 from .services import get_or_create_skill_job, mark_job_failed
 from .storage import open_skill_stream
 from .tasks import launch_academic_recommendations_job, launch_enrichment_job, launch_scan_job
@@ -37,7 +37,14 @@ def index(request):
     selected_category = request.GET.get("category", "")
     selected_purpose = request.GET.get("purpose", "")
     page_number = request.GET.get("page")
-    skills = SharedSkill.objects.prefetch_related("releases")
+    skills = SharedSkill.objects.prefetch_related(
+        "releases",
+        Prefetch(
+            "installations",
+            queryset=SkillInstall.objects.filter(user=request.user),
+            to_attr="user_installations",
+        ),
+    )
     if query:
         skills = skills.filter(Q(name__icontains=query) | Q(description__icontains=query) | Q(slug__icontains=query))
     subpurposes = SkillPurpose.objects.filter(parent__isnull=False)
@@ -87,6 +94,14 @@ def index(request):
         "latest_failed_job": latest_job if not active_job and latest_job and latest_job.status == SkillSyncJob.FAILED else None,
         "sync_sources": GitHubSkillSource.objects.filter(is_enabled=True),
     })
+
+
+@login_required
+def my_skills(request):
+    installations = SkillInstall.objects.filter(user=request.user).select_related(
+        "skill", "skill__source", "skill__purpose"
+    ).prefetch_related("skill__releases")
+    return render(request, "skills/my_skills.html", {"installations": installations})
 
 
 @login_required
@@ -327,8 +342,53 @@ def batch_publish_candidates(request):
 
 
 @login_required
+@require_POST
+def install(request, skill_id):
+    skill = get_object_or_404(SharedSkill, pk=skill_id)
+    installation, created = SkillInstall.objects.get_or_create(
+        user=request.user,
+        skill=skill,
+        defaults={"enabled": True},
+    )
+    if not created and not installation.enabled:
+        installation.enabled = True
+        installation.save(update_fields=["enabled", "updated_at"])
+    messages.success(request, f"已安装 {skill.name}。")
+    return _redirect_to_skill(skill)
+
+
+@login_required
+@require_POST
+def uninstall(request, skill_id):
+    skill = get_object_or_404(SharedSkill, pk=skill_id)
+    SkillInstall.objects.filter(user=request.user, skill=skill).delete()
+    messages.info(request, f"已从我的 Skills 移除 {skill.name}。")
+    return _redirect_to_skill(skill)
+
+
+@login_required
+@require_POST
+def set_enabled(request, skill_id):
+    enabled_value = request.POST.get("enabled")
+    if enabled_value not in {"0", "1"}:
+        return HttpResponse("Invalid enabled value.", status=400)
+    installation = get_object_or_404(SkillInstall, user=request.user, skill_id=skill_id)
+    installation.enabled = enabled_value == "1"
+    installation.save(update_fields=["enabled", "updated_at"])
+    messages.info(request, f"已{'启用' if installation.enabled else '停用'} {installation.skill.name}。")
+    return redirect("skills-library")
+
+
+@login_required
 def detail(request, slug, source_slug=None):
-    skill_query = SharedSkill.objects.prefetch_related("releases")
+    skill_query = SharedSkill.objects.prefetch_related(
+        "releases",
+        Prefetch(
+            "installations",
+            queryset=SkillInstall.objects.filter(user=request.user),
+            to_attr="user_installations",
+        ),
+    )
     if source_slug:
         skill = get_object_or_404(skill_query, source__slug=source_slug, slug=slug)
     else:
@@ -337,6 +397,12 @@ def detail(request, slug, source_slug=None):
             raise Http404
     release = _preferred_release(skill)
     return render(request, "skills/detail.html", {"skill": skill, "release": release})
+
+
+def _redirect_to_skill(skill):
+    if skill.source:
+        return redirect("skills-source-detail", source_slug=skill.source.slug, slug=skill.slug)
+    return redirect("skills-detail", slug=skill.slug)
 
 
 @login_required

@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import AcademicSkillRecommendation, FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillCandidate, SkillPurpose, SkillSyncJob
+from .models import AcademicSkillRecommendation, FeaturedSkill, GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillCandidate, SkillInstall, SkillPurpose, SkillSyncJob
 
 
 @admin.register(SkillSyncJob)
@@ -38,6 +38,14 @@ class SharedSkillAdmin(admin.ModelAdmin):
         if "description" in form.changed_data:
             obj.description_is_manual = True
         super().save_model(request, obj, form, change)
+
+
+@admin.register(SkillInstall)
+class SkillInstallAdmin(admin.ModelAdmin):
+    list_display = ("user", "skill", "enabled", "installed_at", "updated_at")
+    list_filter = ("enabled",)
+    search_fields = ("user__username", "skill__name")
+    readonly_fields = ("installed_at", "updated_at")
 
 
 @admin.register(FeaturedSkill)
