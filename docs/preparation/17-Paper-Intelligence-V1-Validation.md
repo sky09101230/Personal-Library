@@ -36,7 +36,8 @@ API smoke 使用 /v1/chat/completions、temperature=0、max_tokens=256；JSON �
 | Chat/Skeleton migration、Evidence validator、跨语言 retrieval | 已实现；SQLite migrations 和 25 项相关测试通过 | 继续做更多真实论文/浏览器验证 |
 | 新阅读器浏览器闭环 | API/template 已实现；未启动浏览器服务做视觉/键盘复核 | 启动测试环境后验证证据、图、caption、chunk/PDF 导航 |
 | 真实论文 Paper Chat | 已通过 parse 14（11 页、219 Evidence）：3 claims、7 Evidence 引用并持久化 | 增加人工问题和浏览器点击验收 |
-| 真实论文 Skeleton | Cockpit 对完整 Skeleton prompt 多次 transport timeout，已安全记录失败，未伪造成功 | 调整代理输入/模型窗口或换可用模型后重新执行 |
+| 真实论文 Skeleton | 已通过真实论文 API E2E：run/analysis 15 成功，8 个 section 合法；模型对证据不足项被安全降级，当前该样本 supported claims 为 0 | 后续可用更大模型窗口提高有证据 claim 覆盖率；不能把不足证据降级误报为完整科研总览 |
+| Evidence/Reader 导航 | Django test client 对 parse 14：Evidence detail 200、真实 Figure asset 200 image/jpeg、Literature Detail 200 且包含 Paper Intelligence | 浏览器视觉/键盘闭环仍需启动服务复核 |
 
 上表属于后续切换条件或实施后验收，不再笼统列作“已存在但未检查的历史问题”。按 [0046](../decisions/0046-paper-intelligence-sqlite-first.md)，V1 使用现有 SQLite，PostgreSQL 未实测不阻塞 V1；不将延期项标为通过。
 
@@ -112,7 +113,7 @@ API smoke 使用 /v1/chat/completions、temperature=0、max_tokens=256；JSON �
 
 ## 实施后验收与下一步
 
-SQLite migrations、单元/集成测试、旧功能回归及 Cockpit 合成文本/JSON/vision 已完成；真实论文 Chat 已通过。Skeleton 长结构请求、浏览器视觉/键盘闭环、PostgreSQL 并发和更多论文语义评测仍需完成。没有独立测试 DeepSeek 真实服务；旧 DeepSeek 路径通过现有 mock 回归。CLI strict 检查和代理 smoke 均不替代新功能验收。
+SQLite migrations、单元/集成测试、旧功能回归、真实论文 Chat/Skeleton API 及 Evidence/Reader endpoint 已完成；Skeleton 该样本明确为不足证据降级，不能等同于完整科研语义通过。浏览器视觉/键盘闭环、PostgreSQL 并发和更多论文语义评测仍需完成。没有独立测试 DeepSeek 真实服务；旧 DeepSeek 路径通过现有 mock 回归。CLI strict 检查和代理 smoke 均不替代新功能验收。
 
 真实 Evidence ID 只能证明来源真实与可访问，不能自动保证语义蕴含；实施验收必须逐条人工核查重要 claim。默认同步 90 秒和批次数上限是初始设计预算，长文可能只得到明确 partial 结果，不能承诺任意长度论文的一次性完整分析。
 
