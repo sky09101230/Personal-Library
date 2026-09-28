@@ -185,6 +185,7 @@ class LiteratureChunk(models.Model):
 class DocumentAnalysis(models.Model):
     class AnalysisType(models.TextChoices):
         OVERVIEW = "overview", "Overview"
+        PAPER_SKELETON = "paper_skeleton", "Paper skeleton"
 
     document_parse = models.ForeignKey(
         DocumentParse,
@@ -230,6 +231,63 @@ class DocumentAnalysis(models.Model):
             from .overview_validation import validate_overview_payload
 
             validate_overview_payload(self.payload, self.document_parse_id)
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+
+class PaperConversation(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey("auth.User", on_delete=models.CASCADE, related_name="paper_conversations")
+    document_parse = models.ForeignKey(DocumentParse, on_delete=models.CASCADE, related_name="paper_conversations")
+    title = models.CharField(max_length=200, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-updated_at", "-id")
+
+
+class PaperChatMessage(models.Model):
+    class Role(models.TextChoices):
+        USER = "user", "User"
+        ASSISTANT = "assistant", "Assistant"
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+
+    conversation = models.ForeignKey(PaperConversation, on_delete=models.CASCADE, related_name="messages")
+    turn_uuid = models.UUIDField(default=uuid.uuid4)
+    request_id = models.CharField(max_length=128, blank=True)
+    sequence = models.PositiveIntegerField()
+    role = models.CharField(max_length=16, choices=Role.choices)
+    content = models.TextField()
+    structured_payload = models.JSONField(default=dict, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.SUCCEEDED)
+    provider = models.CharField(max_length=64, blank=True)
+    requested_model = models.CharField(max_length=128, blank=True)
+    model = models.CharField(max_length=128, blank=True)
+    prompt_version = models.CharField(max_length=64, blank=True)
+    schema_version = models.CharField(max_length=64, blank=True)
+    input_fingerprint = models.CharField(max_length=64, blank=True)
+    context_manifest = models.JSONField(default=dict, blank=True)
+    error_code = models.CharField(max_length=64, blank=True)
+    error_message = models.TextField(blank=True)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ("sequence", "pk")
+        constraints = [
+            models.UniqueConstraint(fields=("conversation", "sequence"), name="lp_chat_sequence_unique"),
+            models.UniqueConstraint(fields=("conversation", "request_id"), condition=models.Q(role="assistant") & ~models.Q(request_id=""), name="lp_chat_request_unique"),
+            models.UniqueConstraint(fields=("conversation",), condition=models.Q(role="assistant", status="pending"), name="lp_chat_pending_unique"),
+        ]
 
     def save(self, *args, **kwargs):
         self.full_clean()

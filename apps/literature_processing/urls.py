@@ -1,9 +1,13 @@
 from django.urls import path
 
 from . import views
+from . import chat_views
 
 
 urlpatterns = [
+    path("<int:document_id>/chat/", chat_views.conversation_create, name="paper-chat-create"),
+    path("chat/<uuid:conversation_id>/ask/", chat_views.conversation_ask, name="paper-chat-ask"),
+    path("chat/<uuid:conversation_id>/messages/", chat_views.conversation_messages, name="paper-chat-messages"),
     path(
         "<int:document_id>/processing-status/",
         views.literature_processing_status,
