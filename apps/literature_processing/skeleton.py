@@ -131,12 +131,23 @@ def _sanitize_payload(payload):
     for section in payload["sections"].values():
         if not isinstance(section, dict) or not isinstance(section.get("claims"), list):
             continue
-        valid = [claim for claim in section["claims"] if isinstance(claim, dict)
-                 and isinstance(claim.get("text"), str) and isinstance(claim.get("evidence_ids"), list)
-                 and isinstance(claim.get("kind"), str)]
+        normalized = []
+        for claim in section["claims"]:
+            if not isinstance(claim, dict):
+                continue
+            evidence_ids = claim.get("evidence_ids", claim.get("evidence", []))
+            if isinstance(evidence_ids, list):
+                evidence_ids = [item.get("evidence_id") if isinstance(item, dict) else item for item in evidence_ids]
+            if isinstance(evidence_ids, list) and isinstance(claim.get("text", claim.get("claim", "")), str):
+                normalized.append({"text": claim.get("text") or claim.get("claim", ""),
+                                   "evidence_ids": evidence_ids,
+                                   "kind": claim.get("kind") or claim.get("type") or "interpretation"})
+        valid = [claim for claim in normalized if claim["text"].strip() and isinstance(claim["evidence_ids"], list)]
         if len(valid) != len(section["claims"]):
             section["claims"] = []
             section["status"] = "insufficient_evidence"
+        else:
+            section["claims"] = valid
     for figure in payload.get("figures", []) if isinstance(payload.get("figures"), list) else []:
         if not isinstance(figure, dict) or set(figure) != {"evidence_id", "claims", "status"}:
             if isinstance(figure, dict):
