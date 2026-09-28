@@ -1,5 +1,9 @@
 ## Context
 
+### 2026-09-28 历史规范对齐
+
+本 Change 的发布规则承接 `batch-upload-supplementary-materials`：旧 Change 先归档，再归档本 Change；不能逆序归档而恢复未经确认的 Browser/MCP 发布。本 Change 保留原 Requirement/Scenario 标识并更新前置条件，完整承接 supplementary 从属可见性场景；“上传成功”对 Browser/MCP 指完成上传者确认和正式登记，不是仅写入暂存对象。未完成的任务和实际验收状态不因本次规范修复而改变。
+
 网页上传已经通过 `UploadReviewBatch` / `UploadReviewItem` 完成 PDF 暂存、metadata 审核和确认后入库，MCP 上传仍会直接创建正式文献并发布。文件可能达到 100 MB，确认页面不能要求客户端再次上传；同时正式库、Library 和 MCP 检索都以 `CanonicalDocument` / `UploadedDocument` 为边界。
 
 ## Goals / Non-Goals

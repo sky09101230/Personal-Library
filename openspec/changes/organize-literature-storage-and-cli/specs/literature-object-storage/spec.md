@@ -22,6 +22,11 @@ NAS WebDAV 适配器 MUST 通过跳过服务器证书链和主机名验证的 HT
 - **WHEN** 适配器收到文件和合法 namespace
 - **THEN** 适配器必须安全创建缺少的 namespace 目录，并以不会覆盖同名既有对象的随机路径执行 WebDAV PUT
 
+#### Scenario: 上传对象
+- **WHEN** 适配器收到有效 PDF 上传对象且未指定 namespace
+- **THEN** 适配器必须以不会覆盖同名既有对象的随机路径在配置 root 下执行 WebDAV PUT，并返回持久化路径
+- **AND** 文献应用层的新正文上传显式传入 originals namespace，不能因保留默认接口而退回旧布局
+
 #### Scenario: 配置缺失
 - **WHEN** NAS 地址、用户名、密码或文献 root 缺失或不合法
 - **THEN** 系统必须在访问 NAS 前返回受控的文献存储配置错误
@@ -78,4 +83,3 @@ NAS WebDAV 适配器 MUST 通过跳过服务器证书链和主机名验证的 HT
 - **WHEN** source 与 destination 都不存在
 - **THEN** 系统报告无法安全判断并跳过该记录
 - **AND** 不修改数据库 path
-
