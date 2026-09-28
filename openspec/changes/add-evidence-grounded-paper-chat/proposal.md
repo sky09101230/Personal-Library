@@ -36,7 +36,7 @@ models.py 新增 PaperConversation/PaperChatMessage；新增 paper_chat.py、cha
 
 ## Migration / Compatibility
 
-新增两表和外键/唯一约束；旧表无回填。SQLite/PostgreSQL 升级保留现有 parse/analysis；user/parse/conversation 删除 CASCADE 消息，遵循已有 upload 删除关系。回滚先禁用入口并保留表。
+新增两表和外键/唯一约束；旧表无回填。V1 在 SQLite 上验收迁移与并发，保留现有 parse/analysis；模型保持 Django ORM 可移植性，PostgreSQL 实测按决策 0046 留到未来切换前，不阻塞 V1。user/parse/conversation 删除 CASCADE 消息，遵循已有 upload 删除关系。回滚先禁用入口并保留表。
 
 ## Acceptance / Validation
 

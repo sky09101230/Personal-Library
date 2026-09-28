@@ -18,4 +18,4 @@
 
 - [ ] 4.1 测试论证链、每图作用、末页/尾图、缺实验/图、幻觉引用、批次遗漏和 provider 失败。
 - [ ] 4.2 测试缓存与参数变化、force、并发/lease、重 parse/撤销发布；回归旧 Overview/pipeline/view。
-- [ ] 4.3 运行 Django check、SQLite/PostgreSQL migration executor、strict validation；完成授权样本语义验收后才标功能完成。
+- [ ] 4.3 运行 Django check、SQLite migration executor、strict validation；完成授权样本语义验收后才标功能完成。PostgreSQL 实测按决策 0046 移至未来切换任务，不阻塞 V1。

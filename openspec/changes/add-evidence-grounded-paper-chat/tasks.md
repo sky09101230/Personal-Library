@@ -1,7 +1,7 @@
 ## 1. 模型与迁移
 
 - [ ] 1.1 新增 conversation/message 模型及字段，配置删除关系、幂等/sequence/单 pending 唯一约束。
-- [ ] 1.2 编写增量 migration，使用 MigrationExecutor 验证 SQLite/PostgreSQL 原 parse 与 analysis 不变。
+- [ ] 1.2 编写增量 migration，使用 MigrationExecutor 在 SQLite 验证原 parse 与 analysis 不变；PostgreSQL 实测按决策 0046 移至未来切换任务，不阻塞 V1。
 
 ## 2. 会话服务
 

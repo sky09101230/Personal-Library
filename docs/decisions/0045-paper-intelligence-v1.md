@@ -183,7 +183,7 @@ flowchart TD
 
 传递依赖：D/E 均需要 A+B+C，F 需要全部；A 与 B 逻辑独立。建议单 Goal 顺序 A → B → C → D → E → F，不需要并行 Agent。
 
-A/B/C 无数据库迁移，按需读旧 parse；D 添加两表和约束；E 添加 run 表及 analysis choice/schema validator；F 无迁移。迁移号按实施时最新 leaf 分配，不预占。SQLite 和 PostgreSQL migration executor 前后测，旧 analysis、parse 和原 PDF 摘要哈希应不变。回滚先关闭新入口，保留新增表/数据；恢复旧应用前不得将 skeleton 交旧 validator，旧查询仍过滤 overview。不执行破坏性 down migration 作为常规回滚。
+A/B/C 无数据库迁移，按需读旧 parse；D 添加两表和约束；E 添加 run 表及 analysis choice/schema validator；F 无迁移。迁移号按实施时最新 leaf 分配，不预占。按用户确认的 [0046 SQLite 优先决策](0046-paper-intelligence-sqlite-first.md)，V1 在 SQLite 上执行 migration executor 前后测试，旧 analysis、parse 和原 PDF 摘要哈希应不变；PostgreSQL 实测移至未来切换任务，不阻塞 V1。回滚先关闭新入口，保留新增表/数据；恢复旧应用前不得将 skeleton 交旧 validator，旧查询仍过滤 overview。不执行破坏性 down migration 作为常规回滚。
 
 ## 10. 风险与取舍
 

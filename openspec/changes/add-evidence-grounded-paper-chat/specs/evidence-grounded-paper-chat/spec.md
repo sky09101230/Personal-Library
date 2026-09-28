@@ -56,7 +56,7 @@
 - **THEN** 记录安全 failed/error，不创建成功消息，不泄漏密钥
 
 ### Requirement: 并发与重试有明确语义
-系统 MUST 通过 request_id、DB 唯一约束与有限 lease 控制重复和并发 turn，LLM I/O MUST 位于写事务外。
+系统 MUST 通过 request_id、DB 唯一约束与有限 lease 控制重复和并发 turn，LLM I/O MUST 位于写事务外。V1 MUST 在 SQLite 上满足这些约束，不依赖 PostgreSQL 行锁或专属 SQL；PostgreSQL 验证属于后续数据库切换验收。
 
 #### Scenario: 重复提交
 - **WHEN** 相同 conversation/request_id 再提交

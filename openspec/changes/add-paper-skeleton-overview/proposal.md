@@ -36,7 +36,7 @@
 
 ## Migration / Compatibility
 
-增量增加 DocumentAnalysis choice 与 PaperAnalysisRun 表/索引/约束；保留 lp_unique_analysis_input 和全部旧行。schema 按 type 分派；禁止旧 analysis 自动转换。回滚关闭新入口并保留新增数据，旧代码只查询 overview 类型。
+增量增加 DocumentAnalysis choice 与 PaperAnalysisRun 表/索引/约束；保留 lp_unique_analysis_input 和全部旧行。V1 使用 SQLite 完成迁移、并发和旧数据回归；PostgreSQL 实测按决策 0046 留到未来切换前，不阻塞 V1，模型不引入专属 SQL。schema 按 type 分派；禁止旧 analysis 自动转换。回滚关闭新入口并保留新增数据，旧代码只查询 overview 类型。
 
 ## Acceptance / Validation
 

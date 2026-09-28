@@ -68,7 +68,7 @@
 - **THEN** context manifest 分别保存各次 provider、requested/returned model、prompt、输入哈希和实际 allowlist，所有调用计入统一总额度
 
 ### Requirement: 显式再生成追加结果
-系统 MUST 用 PaperAnalysisRun 管理幂等 request、有限 lease、force nonce 和失败，禁止覆盖原成功 analysis。
+系统 MUST 用 PaperAnalysisRun 管理幂等 request、有限 lease、force nonce 和失败，禁止覆盖原成功 analysis。V1 MUST 在 SQLite 上验证迁移与并发约束，模型保持 Django ORM 可移植性；PostgreSQL 实测留到后续数据库切换前。
 
 #### Scenario: 强制生成成功
 - **WHEN** 用户显式 POST force

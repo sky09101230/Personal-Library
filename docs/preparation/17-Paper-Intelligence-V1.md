@@ -4,6 +4,8 @@
 
 ## 依赖与范围
 
+数据库执行策略遵循 [0046](../decisions/0046-paper-intelligence-sqlite-first.md)：V1 先用现有 SQLite，PostgreSQL 实例、迁移与并发实测不阻塞本轮实施和 SQLite 版本验收；它们是未来切换 PostgreSQL 前的必做项。
+
 复用 Python 3.13、Django 5.2、urllib/json/hashlib/zipfile/tempfile、现有本地/NAS storage、PyPDF/MinerU 的 normalized/raw artifact、LiteratureChunk、DocumentAnalysis、登录/CSRF 与原生 PDF 流。V1 无新增 pip 服务依赖，不需要 OpenAI SDK、Redis、Celery、Qdrant、Milvus 或 SQLite FTS。若后续图片尺寸校验确需库，编码前单独论证依赖，不能隐式安装。
 
 仅管理员配置 PAPER_LLM_* 与三个 model role；兼容旧 DEEPSEEK_*。本机候选 endpoint 为 http://localhost:53347/v1，不把它硬编码为生产默认，不在仓库保存任何真实 key。初次设计阶段不连接模型、读取本机论文、操作数据库、创建 migration 或修改 .env；后续按用户要求的前置验证仅使用用户自行填写的 .env 做合成 API smoke，不读取论文或创建功能 migration，详见文末复核结果。
@@ -60,7 +62,7 @@
 | Chat | 两用户同论文会话隔离、重复 request_id、并发 pending、lease 过期/迟到响应、重 parse、撤销发布、删除 parse、历史污染、model provenance | D |
 | Skeleton | 论证链各项 claim、Figure 作用、证据不足、旧 v1/v2 不改、同 key 缓存、force 追加、provider/model 变化失效、失败保留旧成功、批次证据重新验证 | E |
 | UI | 四区、Evidence 展开/键盘/跨页/图片/caption/无图回退、旧 parse 链接、XSS/HTML、登录/CSRF/越权、原 PDF Range、空/失败状态 | F |
-| Migration | D/E 升级前后 legacy 行不变、唯一/条件约束、删除关系、SQLite 与 PostgreSQL | D/E |
+| Migration | D/E 在 SQLite 升级前后 legacy 行不变、唯一/条件约束、删除关系；PostgreSQL 实测移至未来切换任务 | D/E |
 
 自动测试全部用 mock provider，不调用外网。预备测试环境必须隔离本机 DEEPSEEK/MINERU 等真实配置，避免测试错误泄漏 key；可先装载 settings 再清理 provider 环境并使用占位值，不覆盖真实 .env。
 
@@ -68,7 +70,7 @@
 
 ## 后续 Goal 提示建议
 
-“按 docs/decisions/0045 与 preparation/17，依序实施六个 Paper Intelligence V1 Changes；先满足各自验收与迁移兼容要求，每项通过后立即提交。禁止扩大到全库 RAG 或外网 research。沿用已定义 Evidence/ContextPacket 契约；最终验证端到端与旧 Overview/PDF 回归，明确报告真实 provider 和 PostgreSQL 未验证项。”
+“按 docs/decisions/0045、0046 与 preparation/17，使用现有 SQLite 依序实施六个 Paper Intelligence V1 Changes；先满足各自验收与 SQLite 迁移要求，每项通过后立即提交。禁止扩大到全库 RAG 或外网 research。沿用已定义 Evidence/ContextPacket 契约；最终验证端到端与旧 Overview/PDF 回归。PostgreSQL 实测属于未来切换任务，不阻塞本次 SQLite 版本完成，但不得宣称其已验证。”
 
 本轮不创建或启动该 Goal。
 

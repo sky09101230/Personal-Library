@@ -28,14 +28,14 @@ API smoke 使用 /v1/chat/completions、temperature=0、max_tokens=256；JSON �
 
 | 项目 | 当前状态 | 完成条件 |
 | --- | --- | --- |
-| PostgreSQL 现有/新增迁移与并发 | 环境未提供：5432 不可达，PATH 无 psql/pg_ctl/postgres/docker | 提供可用、可丢弃的测试实例后执行；不能推定其它路径/远端没有 PostgreSQL |
+| PostgreSQL 现有/新增迁移与并发 | 按用户要求移至未来切换任务，不是 SQLite V1 阻塞项；当前环境未提供 | 切换前按决策 0046 提供测试实例并完成数据搬迁、并发及回退验收 |
 | 新统一 provider 安全/错误处理 | 尚未实现，原始 HTTP smoke 不能代替 | A 实现后从新入口跑 mock 矩阵与真实代理复验 |
 | 完整输入窗口/其它模型 | 本次小输入 smoke 未验证 | 选定 profile 的模型与窗口配置，验证预算、超限和输出行为 |
 | Chat/Skeleton migration、Evidence validator、跨语言 retrieval | 尚未实现 | B/C/D/E 各自 tasks 的合成测试与增量迁移验收 |
 | 新阅读器浏览器闭环 | 尚未实现；当前 8001 未监听 | F 实现后启动测试环境并验证证据、图、caption、chunk/PDF 导航 |
 | 真实论文语义支持度 | 无功能实现，不能由简单 smoke 推断 | 实施后按准备文档使用授权论文逐条核验，不提交原始资料 |
 
-上表属于明确的外部环境条件或实施后验收，不再笼统列作“已存在但未检查的历史问题”。不启动新功能编码，也不把这些项目标为已完成。
+上表属于后续切换条件或实施后验收，不再笼统列作“已存在但未检查的历史问题”。按 [0046](../decisions/0046-paper-intelligence-sqlite-first.md)，V1 使用现有 SQLite，PostgreSQL 未实测不阻塞 V1；不将延期项标为通过。本轮只更新计划，不启动新功能编码。
 
 ## 交付清单
 
