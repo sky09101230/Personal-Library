@@ -117,4 +117,4 @@ def validate_skeleton_payload(payload):
 
 
 def _prompt():
-    return """Build a paper skeleton only from supplied evidence. Return JSON with language, sections (introduction, motivation, gap, proposed_idea, method, experiments, results, conclusion), figures, limitations and coverage. Each supported claim must have text, evidence_ids and kind; unsupported sections must use insufficient_evidence. Never invent page, figure, URL or evidence IDs."""
+    return """Return JSON only. Build a paper skeleton from the supplied evidence. Include language, sections with keys introduction/motivation/gap/proposed_idea/method/experiments/results/conclusion, figures, limitations and coverage. Each claim has text, evidence_ids and kind. Use insufficient_evidence when unsupported. Use only supplied evidence IDs."""
