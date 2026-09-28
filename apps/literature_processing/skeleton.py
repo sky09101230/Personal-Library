@@ -49,8 +49,12 @@ def generate_skeleton(document_parse, user, *, provider=None, force=False, reque
     try:
         if provider is None:
             raise SkeletonError("provider_unavailable", "Paper LLM provider is unavailable.")
+        provider_context = {**context, "coverage": {
+            "partial": context["coverage"].get("partial", False),
+            "omitted_figures": context["coverage"].get("omitted_figures", []),
+        }}
         messages = [{"role": "system", "content": _prompt()},
-                    {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
+                    {"role": "user", "content": json.dumps(provider_context, ensure_ascii=False)}]
         try:
             result = provider("overview", messages, output_mode="json", max_tokens=512)
         except TypeError:
