@@ -1,6 +1,6 @@
 # Paper Intelligence V1 实施前准备
 
-状态：仅设计，禁止据此宣称已经实现。总体决策见 [0045](../decisions/0045-paper-intelligence-v1.md)。
+状态：A-F 已实现；真实 Skeleton 长输入和浏览器视觉闭环仍待复验。总体决策见 [0045](../decisions/0045-paper-intelligence-v1.md)。
 
 ## 依赖与范围
 

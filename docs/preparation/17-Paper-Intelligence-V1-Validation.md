@@ -1,10 +1,12 @@
 # Paper Intelligence V1 设计验证记录
 
-日期：2026-09-28。审计基线：`382bcd2`。本记录仅证明设计包的结构与一致性检查，不证明功能已实现。
+日期：2026-09-28。审计基线：`382bcd2`。本记录包含设计、实现和验证状态；未通过的真实 Skeleton 长输入与浏览器视觉闭环不会被标记为完成。
 
 ## 当前状态（历史清理与环境复核后）
 
 全仓 OpenSpec strict 已 **33 通过、0 失败**；下文首次交付的 30/3 是保留的历史记录，不是当前状态。历史修复提交为 db893be（场景继承）与 a0b9499（跨页 chunk 规范）。
+
+六个 Change 已按 A→F 串行实现并分别提交：A `ac5634b`、B `1437ef7`、C `c585514`、D `a7053e1`、E `572cfb7`、F `9d0c3fd`；后续 AI 修复为 `1ee9816`、`067833c`。D/E 使用 SQLite migrations 0004、0005、0006。
 
 | 当前可验证项 | 结果 |
 | --- | --- |
@@ -13,7 +15,7 @@
 | Django check | 通过，无问题 |
 | makemigrations --check --dry-run | 通过，No changes detected |
 | migrate --check | 通过，无待应用迁移；未执行生产迁移 |
-| 全量现有测试 | 369 项，362 通过、7 跳过，0 失败；80.748 秒 |
+| 全量现有测试 | 385 项，378 通过、7 跳过，0 失败；111.884 秒 |
 | 跳过原因 | 7 项均为既有 NJU Box backend retired，不是新功能测试被跳过 |
 | Cockpit 连通与认证 | localhost:53347 端口可达；无认证 /models=401，.env 配置 Bearer 后 /models=200 |
 | 文本 smoke | gpt-6-luna，HTTP 200，stop，精确 PROBE_OK，usage 存在，4.79 秒 |
@@ -29,13 +31,14 @@ API smoke 使用 /v1/chat/completions、temperature=0、max_tokens=256；JSON �
 | 项目 | 当前状态 | 完成条件 |
 | --- | --- | --- |
 | PostgreSQL 现有/新增迁移与并发 | 按用户要求移至未来切换任务，不是 SQLite V1 阻塞项；当前环境未提供 | 切换前按决策 0046 提供测试实例并完成数据搬迁、并发及回退验收 |
-| 新统一 provider 安全/错误处理 | 尚未实现，原始 HTTP smoke 不能代替 | A 实现后从新入口跑 mock 矩阵与真实代理复验 |
+| 新统一 provider 安全/错误处理 | 已实现并通过 16 项 Provider/Overview 测试及真实文本/JSON/vision smoke | 后续按完整模型窗口和其它模型继续复验 |
 | 完整输入窗口/其它模型 | 本次小输入 smoke 未验证 | 选定 profile 的模型与窗口配置，验证预算、超限和输出行为 |
-| Chat/Skeleton migration、Evidence validator、跨语言 retrieval | 尚未实现 | B/C/D/E 各自 tasks 的合成测试与增量迁移验收 |
-| 新阅读器浏览器闭环 | 尚未实现；当前 8001 未监听 | F 实现后启动测试环境并验证证据、图、caption、chunk/PDF 导航 |
-| 真实论文语义支持度 | 无功能实现，不能由简单 smoke 推断 | 实施后按准备文档使用授权论文逐条核验，不提交原始资料 |
+| Chat/Skeleton migration、Evidence validator、跨语言 retrieval | 已实现；SQLite migrations 和 25 项相关测试通过 | 继续做更多真实论文/浏览器验证 |
+| 新阅读器浏览器闭环 | API/template 已实现；未启动浏览器服务做视觉/键盘复核 | 启动测试环境后验证证据、图、caption、chunk/PDF 导航 |
+| 真实论文 Paper Chat | 已通过 parse 14（11 页、219 Evidence）：3 claims、7 Evidence 引用并持久化 | 增加人工问题和浏览器点击验收 |
+| 真实论文 Skeleton | Cockpit 对完整 Skeleton prompt 多次 transport timeout，已安全记录失败，未伪造成功 | 调整代理输入/模型窗口或换可用模型后重新执行 |
 
-上表属于后续切换条件或实施后验收，不再笼统列作“已存在但未检查的历史问题”。按 [0046](../decisions/0046-paper-intelligence-sqlite-first.md)，V1 使用现有 SQLite，PostgreSQL 未实测不阻塞 V1；不将延期项标为通过。本轮只更新计划，不启动新功能编码。
+上表属于后续切换条件或实施后验收，不再笼统列作“已存在但未检查的历史问题”。按 [0046](../decisions/0046-paper-intelligence-sqlite-first.md)，V1 使用现有 SQLite，PostgreSQL 未实测不阻塞 V1；不将延期项标为通过。
 
 ## 交付清单
 
@@ -109,7 +112,7 @@ API smoke 使用 /v1/chat/completions、temperature=0、max_tokens=256；JSON �
 
 ## 实施后验收与下一步
 
-新功能单元/集成测试、migration、浏览器阅读闭环、PostgreSQL 并发和真实论文语义评测仍需依赖实现或外部环境。当前旧功能完整回归及 Cockpit 合成文本/JSON/vision 环境验证已完成，详情见本文顶部；没有独立测试 DeepSeek 真实服务，因为本次选择本机 Cockpit 作为后续新能力候选，旧 DeepSeek 路径仅通过现有 mock 回归。CLI strict 检查和代理小样本 smoke 均不替代新功能验收。
+SQLite migrations、单元/集成测试、旧功能回归及 Cockpit 合成文本/JSON/vision 已完成；真实论文 Chat 已通过。Skeleton 长结构请求、浏览器视觉/键盘闭环、PostgreSQL 并发和更多论文语义评测仍需完成。没有独立测试 DeepSeek 真实服务；旧 DeepSeek 路径通过现有 mock 回归。CLI strict 检查和代理 smoke 均不替代新功能验收。
 
 真实 Evidence ID 只能证明来源真实与可访问，不能自动保证语义蕴含；实施验收必须逐条人工核查重要 claim。默认同步 90 秒和批次数上限是初始设计预算，长文可能只得到明确 partial 结果，不能承诺任意长度论文的一次性完整分析。
 
