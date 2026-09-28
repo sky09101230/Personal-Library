@@ -31,12 +31,17 @@
 - **AND** 后续页面的页码不发生偏移
 
 ### Requirement: 文本块稳定追溯到原始页
-系统 MUST 将中立解析结果分为稳定、有序且页内的文本块。每个文本块 MUST 能经由解析记录和上传记录追溯到规范文献、原始 PDF 与明确页码。
+系统 MUST 将中立解析结果分为稳定、有序的文本块。PyPDF v1 的页文本 chunker MUST 保持页内分块；structured parse v2 的结构 chunker MAY 跨页组合相同 section 的连续文本，但 MUST 保存起止页及逐段 source_spans。每个文本块 MUST 能经由解析记录和上传记录追溯到规范文献、原始 PDF 与明确页码。
 
 #### Scenario: 创建文本块
 - **WHEN** 一个包含可提取文本的解析结果完成分块
 - **THEN** 每个文本块记录所属 parse、顺序、稳定标识、文本内容和原始页码
-- **AND** 文本块不跨越页面边界
+- **AND** 页文本 chunker 生成的块不跨页，结构 chunker 的跨页块记录真实起止页和每段 block/page/offset 来源
+
+#### Scenario: 结构化文本跨页
+- **WHEN** structured parse v2 的同 section 文本跨越两页且满足结构 chunker 的合并预算
+- **THEN** 文本块可跨页，并通过 source_spans 逐段保留 block_id、原始页号、chunk offsets 和 block offsets
+- **AND** 任何具体片段的精确页定位以其 source span 为准，不把起始页当作所有片段的页码
 
 #### Scenario: 对相同输入使用相同版本分块
 - **WHEN** 相同的页文本使用相同 chunker 版本和参数重新分块
@@ -113,4 +118,3 @@
 #### Scenario: Parser 后端返回额外字段
 - **WHEN** adapter 收到特定 parser 的额外原始字段
 - **THEN** 下游 chunks 和 analysis 不保存或依赖这些后端专有字段
-

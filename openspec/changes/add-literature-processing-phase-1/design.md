@@ -30,7 +30,7 @@
 
 - `DocumentProcessingJob` 外键指向 `UploadedDocument`，保存 queued/running/succeeded/failed 状态、当前 stage、pipeline/parser/chunker/prompt 版本、错误、时间戳和 attempt。数据库约束保证每个 upload 同时最多一个活动任务。
 - `DocumentParse` 一对一指向 job，保存 parser 名称/版本、中立 schema 版本、页数，以及 artifact 的 backend/path/sha256/content type/size。每次重处理创建新 parse。
-- `LiteratureChunk` 外键指向 parse，保存稳定 chunk key、全局顺序、页码、页内顺序、文本和内容哈希。Phase 1 块不跨页，从而让 evidence 页码无歧义。
+- `LiteratureChunk` 外键指向 parse，保存稳定 chunk key、全局顺序、页码、页内顺序、文本和内容哈希。PyPDF v1 保持页内块；后续 MinerU structured parse v2 已增加起止页、section_path 和 source_spans，允许同 section 跨页组合并逐段保留真实来源（2026-09-28 对齐当前实现）。
 - `DocumentAnalysis` 外键指向 parse 并可追溯 job，`analysis_type` Phase 1 仅允许 `overview`，保存通用 JSON payload、provider/model/prompt version/input fingerprint。模型验证 overview 结构与 chunk/page evidence 后才允许保存。
 
 没有单独的 Evidence 表：Phase 1 的 evidence 是 overview key point 中的小型引用数组，引用同一 parse 的 chunk 主键和 page；增加第五个模型不会改善当前查询或完整性边界。
@@ -40,6 +40,8 @@
 contract 使用不可变值对象表达 `ParsedPage(page_number, text)` 和 `ParsedDocument(schema_version, parser_name, parser_version, pages, metadata, warnings)`。PyPDF adapter 只在边界内接触 `pypdf.PdfReader`，清除 PostgreSQL 不接受的 NUL 字符，并为空页保留页号。未来 MinerU/Docling 只需新增 adapter，将其结果映射到相同 contract。
 
 chunker 按规范化后的单页文本做确定性字符窗口切分，优先在段落/句末边界截断，使用固定 overlap；chunk key 由 page、页内序号和文本 SHA-256 组成。字符窗口不需要 tokenizer 依赖，且同版本输入可重复得到相同边界。
+
+上述字符窗口说明适用于 PyPDF v1。当前 v2 的 `structure-blocks-v1` 按 block/section 分组并保留 table 原子性，可以跨页；`source_spans` 给出每段真实 block/page 及精确 offsets。旧 Overview 的 chunk/page 链接仍只使用 chunk 起始页；Paper Intelligence 的精确 span 引用由新的 Evidence layer 负责，不把新能力描述为旧 Overview 已实现。
 
 ### 4. Artifact 存对象存储，查询单元存数据库
 
