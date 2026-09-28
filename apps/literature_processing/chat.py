@@ -56,13 +56,17 @@ def ask_conversation(conversation, user, question, *, request_id=None, provider=
     try:
         parse, catalog = open_paper(user, conversation.document_parse.uploaded_document.canonical_document_id,
                                     parse_id=conversation.document_parse_id)
-        packet = build_context_packet(catalog, question, history=_history(conversation), provider=provider)
+        packet = build_context_packet(catalog, question, history=_history(conversation), budget=12000, provider=provider)
         if provider is None:
             raise ChatError("provider_unavailable", "Paper LLM provider is unavailable.")
         result = provider("chat", [{"role": "system", "content": _system_prompt()},
                                     {"role": "user", "content": json.dumps(packet.payload, ensure_ascii=False)}], output_mode="json")
         payload = json.loads(result.content if hasattr(result, "content") else result)
         claims = payload.get("claims") if isinstance(payload, dict) else None
+        if isinstance(claims, list):
+            for claim in claims:
+                if isinstance(claim, dict) and claim.get("kind") not in {"finding", "interpretation", "limitation"}:
+                    claim["kind"] = "interpretation"
         validate_claims(catalog, claims, packet.allowed_evidence_ids)
         status = payload.get("status")
         if status not in {"supported", "insufficient_evidence"}:
@@ -84,7 +88,7 @@ def ask_conversation(conversation, user, question, *, request_id=None, provider=
         return assistant
     except Exception as exc:
         assistant.status = PaperChatMessage.Status.FAILED
-        assistant.error_code = getattr(exc, "code", "generation_failed")[:64]
+        assistant.error_code = (getattr(exc, "code", None) or "generation_failed")[:64]
         assistant.error_message = str(exc)[:500]
         assistant.completed_at = timezone.now()
         assistant.lease_expires_at = None

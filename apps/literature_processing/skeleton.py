@@ -28,7 +28,7 @@ class SkeletonError(RuntimeError):
 def generate_skeleton(document_parse, user, *, provider=None, force=False, request_id=None, catalog=None):
     from .evidence import build_catalog
     catalog = catalog or build_catalog(document_parse)
-    context = build_skeleton_context(catalog)
+    context = build_skeleton_context(catalog, budget=3000)
     generation_key = hashlib.sha256(json.dumps({"parse": document_parse.pk, "artifact": document_parse.artifact_sha256,
                                                 "context": context, "prompt": SKELETON_PROMPT_VERSION}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     request_id = request_id or uuid.uuid4().hex
@@ -49,8 +49,12 @@ def generate_skeleton(document_parse, user, *, provider=None, force=False, reque
     try:
         if provider is None:
             raise SkeletonError("provider_unavailable", "Paper LLM provider is unavailable.")
-        result = provider("overview", [{"role": "system", "content": _prompt()},
-                                        {"role": "user", "content": json.dumps(context, ensure_ascii=False)}], output_mode="json")
+        messages = [{"role": "system", "content": _prompt()},
+                    {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
+        try:
+            result = provider("overview", messages, output_mode="json", max_tokens=512)
+        except TypeError:
+            result = provider("overview", messages, output_mode="json")
         payload = json.loads(result.content if hasattr(result, "content") else result)
         validate_skeleton_payload(payload)
         allowed = context.get("allowed_evidence_ids", [])
@@ -77,7 +81,7 @@ def generate_skeleton(document_parse, user, *, provider=None, force=False, reque
         return run
     except Exception as exc:
         run.status = PaperAnalysisRun.Status.FAILED
-        run.error_code = getattr(exc, "code", "generation_failed")[:64]
+        run.error_code = (getattr(exc, "code", None) or "generation_failed")[:64]
         run.error_message = str(exc)[:500]
         run.completed_at = timezone.now()
         run.lease_expires_at = None

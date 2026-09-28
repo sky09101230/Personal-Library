@@ -87,7 +87,7 @@ def load_config(*, environ=None):
     )
 
 
-def complete(role, messages, *, output_mode="text", images=None, config=None, request_func=None):
+def complete(role, messages, *, output_mode="text", images=None, config=None, request_func=None, max_tokens=8192):
     config = config or load_config()
     model = {"chat": config.chat_model, "overview": config.overview_model, "vision": config.vision_model}.get(role)
     if not model:
@@ -96,7 +96,7 @@ def complete(role, messages, *, output_mode="text", images=None, config=None, re
         raise LLMError("capability_unavailable", "Vision capability is not enabled.")
     if output_mode not in {"text", "json"}:
         raise LLMError("invalid_configuration", "Unsupported LLM output mode.")
-    body = {"model": model, "messages": messages, "temperature": 0, "max_tokens": 8192}
+    body = {"model": model, "messages": messages, "temperature": 0, "max_tokens": max(1, int(max_tokens))}
     if output_mode == "json" and config.json_mode:
         body["response_format"] = {"type": "json_object"}
     if images:
