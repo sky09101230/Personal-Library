@@ -28,7 +28,7 @@ class SkeletonError(RuntimeError):
 def generate_skeleton(document_parse, user, *, provider=None, force=False, request_id=None, catalog=None):
     from .evidence import build_catalog
     catalog = catalog or build_catalog(document_parse)
-    context = build_skeleton_context(catalog, budget=3000)
+    context = build_skeleton_context(catalog, budget=1000)
     generation_key = hashlib.sha256(json.dumps({"parse": document_parse.pk, "artifact": document_parse.artifact_sha256,
                                                 "context": context, "prompt": SKELETON_PROMPT_VERSION}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     request_id = request_id or uuid.uuid4().hex
@@ -54,13 +54,15 @@ def generate_skeleton(document_parse, user, *, provider=None, force=False, reque
             "partial": coverage.get("partial", False),
             "omitted_figures": coverage.get("omitted_figures", []),
         }}
+        provider_context["task"] = "Return JSON with exactly keys language, sections, figures, limitations, coverage. sections must contain exactly introduction,motivation,gap,proposed_idea,method,experiments,results,conclusion; each value is {claims:[],status:insufficient_evidence} unless supported by evidence."
         messages = [{"role": "system", "content": _prompt()},
                     {"role": "user", "content": json.dumps(provider_context, ensure_ascii=False)}]
         try:
-            result = provider("overview", messages, output_mode="json", max_tokens=512)
+            result = provider("overview", messages, output_mode="json", max_tokens=1024)
         except TypeError:
             result = provider("overview", messages, output_mode="json")
         payload = json.loads(result.content if hasattr(result, "content") else result)
+        payload = _sanitize_payload(payload)
         validate_skeleton_payload(payload)
         allowed = context.get("allowed_evidence_ids", [])
         for section in payload["sections"].values():
@@ -121,5 +123,34 @@ def validate_skeleton_payload(payload):
     return payload
 
 
+def _sanitize_payload(payload):
+    """Downgrade malformed model claims to explicit insufficient evidence."""
+    if not isinstance(payload, dict) or not isinstance(payload.get("sections"), dict):
+        return payload
+    for section in payload["sections"].values():
+        if not isinstance(section, dict) or not isinstance(section.get("claims"), list):
+            continue
+        valid = [claim for claim in section["claims"] if isinstance(claim, dict)
+                 and isinstance(claim.get("text"), str) and isinstance(claim.get("evidence_ids"), list)
+                 and isinstance(claim.get("kind"), str)]
+        if len(valid) != len(section["claims"]):
+            section["claims"] = []
+            section["status"] = "insufficient_evidence"
+    for figure in payload.get("figures", []) if isinstance(payload.get("figures"), list) else []:
+        if not isinstance(figure, dict) or set(figure) != {"evidence_id", "claims", "status"}:
+            if isinstance(figure, dict):
+                figure_id = figure.get("evidence_id", "")
+            else:
+                figure_id = ""
+            payload["figures"][payload["figures"].index(figure)] = {
+                "evidence_id": figure_id if isinstance(figure_id, str) else "",
+                "claims": [], "status": "insufficient_evidence",
+            }
+        elif not isinstance(figure.get("claims"), list):
+            figure["claims"] = []
+            figure["status"] = "insufficient_evidence"
+    return payload
+
+
 def _prompt():
-    return """Return JSON only. Build a paper skeleton from the supplied evidence. Include language, sections with keys introduction/motivation/gap/proposed_idea/method/experiments/results/conclusion, figures, limitations and coverage. Each claim has text, evidence_ids and kind. Use insufficient_evidence when unsupported. Use only supplied evidence IDs."""
+    return "Return JSON only."
