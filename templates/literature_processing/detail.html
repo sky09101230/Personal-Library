@@ -105,6 +105,36 @@
   </aside>
 </div>
 
+<section class="detail-section paper-intelligence-reader" aria-labelledby="paper-intelligence-title">
+  <div class="overview-heading">
+    <div><p class="eyebrow">Paper Intelligence</p><h2 id="paper-intelligence-title">文章智能阅读</h2></div>
+    {% if result_parse %}<span class="subtle">Parse {{ result_parse.pk }} · {{ result_parse.schema_version }}</span>{% endif %}
+  </div>
+  <div class="reader-grid">
+    <article aria-labelledby="skeleton-title">
+      <h3 id="skeleton-title">Paper Skeleton Overview</h3>
+      {% if skeleton %}
+        <p class="analysis-provenance">{{ skeleton.provider }} · {{ skeleton.model }} · {{ skeleton.prompt_version }}</p>
+        <div class="skeleton-sections">
+          {% for name, section in skeleton.payload.sections.items %}
+          <section class="skeleton-section"><h4>{{ name }}</h4>{% if section.claims %}<ul>{% for claim in section.claims %}<li>{{ claim.text }} <span class="evidence-links">{% for evidence_id in claim.evidence_ids %}<a href="{% url 'paper-evidence-detail' literature.pk result_parse.pk evidence_id %}" target="_blank" rel="noopener">Evidence</a>{% endfor %}</span></li>{% endfor %}</ul>{% else %}<p class="subtle">证据不足。</p>{% endif %}</section>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="subtle">暂无结构化总览。生成会按论文结构覆盖 Introduction、Method、Results、Figures 和 Conclusion。</p>
+        {% if result_parse %}<button type="button" class="row-action" id="generate-skeleton" data-url="{% url 'paper-skeleton-generate' literature.pk %}">生成 Paper Skeleton</button>{% endif %}
+      {% endif %}
+    </article>
+    <article aria-labelledby="chat-title">
+      <h3 id="chat-title">Paper Chat</h3>
+      <div id="paper-chat-messages" aria-live="polite"><p class="subtle">回答只基于当前 parse 的 Evidence。</p></div>
+      {% if result_parse %}<form id="paper-chat-form" data-create-url="{% url 'paper-chat-create' literature.pk %}" data-ask-base="{% url 'paper-chat-ask' '00000000-0000-0000-0000-000000000000' %}">
+        {% csrf_token %}<label for="paper-chat-question">问题</label><textarea id="paper-chat-question" name="question" rows="3" required></textarea><button type="submit" class="row-action primary-action">提问</button>
+      </form>{% endif %}
+    </article>
+  </div>
+</section>
+
 <section class="detail-section parsed-text-section" aria-labelledby="parsed-text-title">
   <p class="eyebrow">Page Text</p>
   <h2 id="parsed-text-title">Parsed Text</h2>
@@ -173,6 +203,41 @@
   };
   timer = setInterval(refresh, 2000);
   refresh();
+})();
+</script>
+{% endif %}
+{% if result_parse %}
+<script>
+(() => {
+  const skeleton = document.getElementById("generate-skeleton");
+  if (skeleton) skeleton.addEventListener("click", async () => {
+    skeleton.disabled = true;
+    const response = await fetch(skeleton.dataset.url, {method: "POST", credentials: "same-origin", headers: {"X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "", "Content-Type": "application/json"}, body: "{}"});
+    if (response.ok) window.location.reload(); else { skeleton.disabled = false; skeleton.textContent = "生成失败，请稍后重试"; }
+  });
+  const form = document.getElementById("paper-chat-form");
+  if (!form) return;
+  let conversationId = null;
+  const messages = document.getElementById("paper-chat-messages");
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const question = document.getElementById("paper-chat-question").value.trim();
+    if (!question) return;
+    const csrf = form.querySelector("[name=csrfmiddlewaretoken]").value;
+    if (!conversationId) {
+      const created = await fetch(form.dataset.createUrl, {method: "POST", credentials: "same-origin", headers: {"X-CSRFToken": csrf, "Content-Type": "application/json"}, body: JSON.stringify({})});
+      if (!created.ok) { messages.textContent = "无法创建会话。"; return; }
+      conversationId = (await created.json()).conversation_id;
+    }
+    const askUrl = form.dataset.askBase.replace("00000000-0000-0000-0000-000000000000", conversationId);
+    const response = await fetch(askUrl, {method: "POST", credentials: "same-origin", headers: {"X-CSRFToken": csrf, "Content-Type": "application/json"}, body: JSON.stringify({question, request_id: crypto.randomUUID()})});
+    const payload = await response.json();
+    const article = document.createElement("article");
+    article.className = "parsed-chunk";
+    article.textContent = payload.answer || payload.message || "无法回答。";
+    messages.appendChild(article);
+    if (response.ok) document.getElementById("paper-chat-question").value = "";
+  });
 })();
 </script>
 {% endif %}

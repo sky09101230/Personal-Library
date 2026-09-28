@@ -6,6 +6,7 @@ from django.views.decorators.http import require_GET
 from apps.box_upload.models import CanonicalDocument, UploadedDocument
 
 from .models import DocumentAnalysis, DocumentParse, DocumentProcessingJob
+from .models import PaperConversation
 
 
 _STATUS_LABELS = {
@@ -52,10 +53,14 @@ def literature_detail(request, document_id):
     successful_job = jobs.filter(status=DocumentProcessingJob.Status.SUCCEEDED).first()
     result_parse = _job_parse(successful_job) or _job_parse(jobs.exclude(document_parse=None).first())
     overview = None
+    skeleton = None
     pages = []
     if result_parse is not None:
         overview = result_parse.analyses.filter(
             analysis_type=DocumentAnalysis.AnalysisType.OVERVIEW,
+        ).first()
+        skeleton = result_parse.analyses.filter(
+            analysis_type=DocumentAnalysis.AnalysisType.PAPER_SKELETON,
         ).first()
         pages = _group_chunks_by_page(result_parse)
 
@@ -70,6 +75,7 @@ def literature_detail(request, document_id):
             "processing_state": processing_state,
             "result_parse": result_parse,
             "overview": overview,
+            "skeleton": skeleton,
             "pages": pages,
             "source_upload": source_upload,
         },

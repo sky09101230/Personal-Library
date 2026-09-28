@@ -3,9 +3,12 @@ from django.urls import path
 from . import views
 from . import chat_views
 from . import skeleton_views
+from . import reader_views
 
 
 urlpatterns = [
+    path("<int:document_id>/evidence/<int:parse_id>/<path:evidence_id>/", reader_views.evidence_detail, name="paper-evidence-detail"),
+    path("<int:document_id>/figure/<int:parse_id>/<path:evidence_id>/", reader_views.figure_asset, name="paper-figure-asset"),
     path("<int:document_id>/skeleton/", skeleton_views.skeleton_generate, name="paper-skeleton-generate"),
     path("skeleton/<int:run_id>/", skeleton_views.skeleton_status, name="paper-skeleton-status"),
     path("<int:document_id>/chat/", chat_views.conversation_create, name="paper-chat-create"),
