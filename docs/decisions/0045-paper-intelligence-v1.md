@@ -151,10 +151,12 @@ V1 有界同步 POST，页面等待且可以 GET 重读状态；不向浏览器�
 ### Skeleton（E 所有）
 
 DocumentAnalysis 新增 analysis_type=paper_skeleton，schema=personal.paper-skeleton.v1，prompt=paper-skeleton-v1；保留现有 overview 分派和所有旧行，不批量“升级”旧 payload。新 validator 调用 B 的公共引用验证。
-新增 PaperAnalysisRun：parse FK、requested_by、analysis_type、generation_key、generation_nonce、status、result FK(DocumentAnalysis, nullable SET_NULL)、provider/model/prompt/schema、context_manifest、error/timestamps/lease。同 parse/type 最多一个 pending run，request_id 幂等；租约与 D 相同协议但模型不复用对话消息。同步执行有界批次，失败重试不重新 parse。GET 不启动付费生成，显式 POST 才生成。
+新增 PaperAnalysisRun：parse FK、requested_by、request_id、analysis_type、generation_key、generation_nonce、status、result FK(DocumentAnalysis, nullable SET_NULL)、provider/model/prompt/schema、context_manifest、error/timestamps/lease。同 parse/type 最多一个 pending run，requested_by+request_id 唯一；租约与 D 相同协议但模型不复用对话消息。同步执行有界批次，失败重试不重新 parse。GET 不启动付费生成，显式 POST 才生成。
 
 input_fingerprint 包括 parse/artifact/chunk manifest、Evidence/retrieval/context 版本、实际包内容、prompt/schema、provider profile 标识/API 根路径摘要、requested model、生成参数、vision 模式和所有批次。密钥不进指纹。返回 model 另存 provenance，服务端模型别名变化不能自动检测，用户可显式重生成。
-普通请求命中同 key 的最新成功结果；force 生成新 nonce 纳入 fingerprint，从而现有唯一约束允许追加新 analysis；nonce 不影响普通请求对逻辑 generation_key 的缓存查询。失败保留原成功结果、run 记录错误。旧 overview 的指纹含义不改。
+逻辑 generation_key 由模型调用前可确定的来源、批次计划、配置及版本计算；实际 input_fingerprint 另纳入已执行的 extract/reduce 输入与 nonce。普通请求命中同 key 的最新成功结果；force 生成新 nonce 纳入 fingerprint，从而现有唯一约束允许追加新 analysis；nonce 不影响普通请求对逻辑 generation_key 的缓存查询。失败保留原成功结果、run 记录错误。旧 overview 的指纹含义不改。
+
+context_manifest 逐次记录 rewrite/extract/reduce/vision 的 purpose、provider、requested/returned model、prompt version、输入哈希、实际 allowlist、usage（可空）与模式；顶层 model 是最终回答/组织模型，不能覆盖其它调用的 provenance。可选 vision 调用也计入最多五次的 Skeleton 模型调用上限和 90 秒总 deadline；超出则文字降级或 partial，不能偷偷增加无限子调用。
 
 新 Skeleton payload：language、sections（introduction/motivation/gap/proposed_idea/method/experiments/results/conclusion，每项 claims 或 insufficient）、figures（Figure ID、验证问题、设置、观察结果、论证作用及各自 claim）、limitations、coverage。图片解读模式 text_grounded / vision_assisted 明示。中文为新能力默认，可配置英文；不改旧 Overview 英文/中文翻译策略，跨语言字段不能凭翻译增加事实。
 

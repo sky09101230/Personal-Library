@@ -63,6 +63,10 @@
 - **WHEN** 模型、provider profile、prompt 或预算改变实际 context
 - **THEN** 不命中旧生成缓存，生成新记录并保留旧 provenance
 
+#### Scenario: 分批与视觉使用不同模型
+- **WHEN** 一次生成包含不同 role 的 extract、reduce 或 vision 调用
+- **THEN** context manifest 分别保存各次 provider、requested/returned model、prompt、输入哈希和实际 allowlist，所有调用计入统一总额度
+
 ### Requirement: 显式再生成追加结果
 系统 MUST 用 PaperAnalysisRun 管理幂等 request、有限 lease、force nonce 和失败，禁止覆盖原成功 analysis。
 
