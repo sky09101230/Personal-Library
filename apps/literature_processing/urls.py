@@ -2,9 +2,12 @@ from django.urls import path
 
 from . import views
 from . import chat_views
+from . import skeleton_views
 
 
 urlpatterns = [
+    path("<int:document_id>/skeleton/", skeleton_views.skeleton_generate, name="paper-skeleton-generate"),
+    path("skeleton/<int:run_id>/", skeleton_views.skeleton_status, name="paper-skeleton-status"),
     path("<int:document_id>/chat/", chat_views.conversation_create, name="paper-chat-create"),
     path("chat/<uuid:conversation_id>/ask/", chat_views.conversation_ask, name="paper-chat-ask"),
     path("chat/<uuid:conversation_id>/messages/", chat_views.conversation_messages, name="paper-chat-messages"),

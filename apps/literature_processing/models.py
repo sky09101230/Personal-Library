@@ -231,6 +231,10 @@ class DocumentAnalysis(models.Model):
             from .overview_validation import validate_overview_payload
 
             validate_overview_payload(self.payload, self.document_parse_id)
+        elif self.analysis_type == self.AnalysisType.PAPER_SKELETON:
+            from .skeleton import validate_skeleton_payload
+
+            validate_skeleton_payload(self.payload)
 
     def save(self, *args, **kwargs):
         self.full_clean()
@@ -292,3 +296,39 @@ class PaperChatMessage(models.Model):
     def save(self, *args, **kwargs):
         self.full_clean()
         return super().save(*args, **kwargs)
+
+
+class PaperAnalysisRun(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        SUCCEEDED = "succeeded", "Succeeded"
+        FAILED = "failed", "Failed"
+
+    document_parse = models.ForeignKey(DocumentParse, on_delete=models.CASCADE, related_name="paper_analysis_runs")
+    requested_by = models.ForeignKey("auth.User", on_delete=models.CASCADE, related_name="paper_analysis_runs")
+    request_id = models.CharField(max_length=128, blank=True)
+    analysis_type = models.CharField(max_length=32, default=DocumentAnalysis.AnalysisType.PAPER_SKELETON)
+    generation_key = models.CharField(max_length=64)
+    generation_nonce = models.CharField(max_length=64, blank=True)
+    status = models.CharField(max_length=16, choices=Status.choices, default=Status.PENDING)
+    result = models.ForeignKey(DocumentAnalysis, null=True, blank=True, on_delete=models.SET_NULL, related_name="skeleton_runs")
+    provider = models.CharField(max_length=64, blank=True)
+    requested_model = models.CharField(max_length=128, blank=True)
+    model = models.CharField(max_length=128, blank=True)
+    prompt_version = models.CharField(max_length=64, blank=True)
+    schema_version = models.CharField(max_length=64, blank=True)
+    context_manifest = models.JSONField(default=dict, blank=True)
+    error_code = models.CharField(max_length=64, blank=True)
+    error_message = models.TextField(blank=True)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ("-created_at", "-pk")
+        constraints = [
+            models.UniqueConstraint(fields=("requested_by", "request_id"), condition=~models.Q(request_id=""), name="lp_skeleton_request_unique"),
+            models.UniqueConstraint(fields=("document_parse", "analysis_type"), condition=models.Q(status__in=("pending", "running")), name="lp_skeleton_pending_unique"),
+        ]
