@@ -1,14 +1,14 @@
 {% extends "base.html" %}
-{% block title %}PLAB Scientific Workspace{% endblock %}
+{% block title %}Personal Knowledge Library{% endblock %}
 {% block content %}
-<div class="page-head"><p class="eyebrow">PLAB Scientific Workspace</p><h1>科研工作区</h1><p class="subtle">从这里进入文献、共享 Skills 与管理功能。</p></div>
+<div class="page-head"><p class="eyebrow">Personal Knowledge Library</p><h1>个人知识库</h1><p class="subtle">从这里进入文献、共享 Skills 与管理功能。</p></div>
 <section aria-labelledby="workspace-features">
   <div class="home-section-head"><div><h2 id="workspace-features">功能区</h2><p class="subtle">选择要继续的工作。</p></div></div>
   <div class="skill-card-grid workspace-card-grid">
-    <a class="skill-card workspace-card" href="{% url 'library' %}"><div><p class="eyebrow">Literature</p><h2>文献库</h2><p class="subtle">搜索、筛选、阅读和复核团队文献。</p></div><span>进入文献库 →</span></a>
+    <a class="skill-card workspace-card" href="{% url 'library' %}"><div><p class="eyebrow">Literature</p><h2>文献库</h2><p class="subtle">搜索、筛选、阅读和复核收藏的文献。</p></div><span>进入文献库 →</span></a>
     <a class="skill-card workspace-card" href="{% url 'box-upload' %}"><div><p class="eyebrow">Upload</p><h2>上传文献</h2><p class="subtle">上传 PDF 并生成可检索的文献记录。</p></div><span>上传 PDF →</span></a>
     <a class="skill-card workspace-card" href="{% url 'upload-history' %}"><div><p class="eyebrow">My Library</p><h2>我的文献</h2><p class="subtle">查看自己上传或通过 DOI、Zotero 关联的文献。</p></div><span>查看我的文献 →</span></a>
-    <a class="skill-card workspace-card" href="{% url 'skills-index' %}"><div><p class="eyebrow">Shared Skills</p><h2>共享 Skills</h2><p class="subtle">查找团队发布的科研工作流与工具。</p></div><span>浏览 Skills →</span></a>
+    <a class="skill-card workspace-card" href="{% url 'skills-index' %}"><div><p class="eyebrow">Shared Skills</p><h2>共享 Skills</h2><p class="subtle">查找收藏的工作流与工具。</p></div><span>浏览 Skills →</span></a>
     {% if request.user.is_staff %}<a class="skill-card workspace-card" href="/admin/"><div><p class="eyebrow">Administration</p><h2>管理后台</h2><p class="subtle">管理文献、Skills、账号与系统数据。</p></div><span>进入管理后台 →</span></a>{% endif %}
   </div>
 </section>

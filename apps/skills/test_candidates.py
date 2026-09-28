@@ -230,7 +230,8 @@ class CandidateWorkflowTests(TestCase):
         )
         candidate_storage = MagicMock()
         candidate_storage.open_stream.return_value.iter_chunks.return_value = iter((b"zip",))
-        formal_storage = MagicMock()
+        formal_storage = MagicMock(name="formal_storage")
+        formal_storage.name = "nas_webdav"
         formal_storage.upload.return_value = "/formal/demo.zip"
 
         skill = publish_candidate(candidate, self.admin, formal_storage=formal_storage, candidate_storage=candidate_storage)
@@ -256,7 +257,8 @@ class CandidateWorkflowTests(TestCase):
         )
         candidate_storage = MagicMock()
         candidate_storage.open_stream.return_value.iter_chunks.return_value = iter((b"zip",))
-        formal_storage = MagicMock()
+        formal_storage = MagicMock(name="formal_storage")
+        formal_storage.name = "nas_webdav"
         formal_storage.upload.return_value = "/formal/rollback.zip"
 
         with self.assertRaises(CandidatePublishError):

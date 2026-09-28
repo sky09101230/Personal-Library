@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{% if request.user.is_staff %}Skill 候选审核{% else %}我的 Skill 投稿{% endif %} | PLAB{% endblock %}
+{% block title %}{% if request.user.is_staff %}Skill 候选审核{% else %}我的 Skill 投稿{% endif %} | Personal{% endblock %}
 {% block content_class %}content-wide{% endblock %}
 {% block content %}
 <div class="page-head"><p class="eyebrow">Skill 候选池</p><h1>{% if request.user.is_staff %}候选审核{% else %}我的投稿{% endif %}</h1><p class="subtle">候选内容与正式库隔离，只有管理员批准后才会发布。</p></div>

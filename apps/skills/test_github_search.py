@@ -304,6 +304,7 @@ class GitHubSearchSummaryTests(TestCase):
 
     @patch("apps.skills.github_search.generate_skill_discovery_assessments")
     @patch("apps.skills.github_search._request_json")
+    @patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-only-key"})
     def test_blob_and_summary_cache_are_reused(self, request_json, generate):
         document = "# Academic helper\nSummarize research data."
         request_json.return_value = {
@@ -336,6 +337,7 @@ class GitHubSearchSummaryTests(TestCase):
 
     @patch("apps.skills.github_search.generate_skill_discovery_assessments")
     @patch("apps.skills.github_search._request_json")
+    @patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-only-key"})
     def test_one_blob_failure_does_not_hide_other_summaries(self, request_json, generate):
         document = "# Research helper"
 
@@ -372,6 +374,7 @@ class GitHubSearchSummaryTests(TestCase):
 
     @patch("apps.skills.github_search.generate_skill_discovery_assessments")
     @patch("apps.skills.github_search._request_json")
+    @patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-only-key"})
     def test_deepseek_failure_keeps_github_item_usable(self, request_json, generate):
         document = "# Research helper"
         request_json.return_value = {

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}投稿 Skill | PLAB{% endblock %}
+{% block title %}投稿 Skill | Personal{% endblock %}
 {% block content %}
 <div class="page-head"><p class="eyebrow">Skill 投稿</p><h1>上传一个 Skill ZIP</h1><p class="subtle">不需要 GitHub。系统会检查格式、生成摘要并建议分类，管理员批准前不会进入正式库。</p></div>
 {% if messages %}{% for message in messages %}<div class="notice{% if message.tags == 'error' %} error{% endif %}">{{ message }}</div>{% endfor %}{% endif %}

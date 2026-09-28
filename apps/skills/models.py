@@ -198,7 +198,7 @@ class SharedSkillRelease(models.Model):
     git_commit = models.CharField(max_length=64)
     storage_backend = models.CharField(
         max_length=20,
-        choices=(("nas_webdav", "NAS WebDAV"),),
+        choices=(("nas_webdav", "NAS WebDAV"), ("local", "Local filesystem")),
         default="nas_webdav",
     )
     repository_id = models.CharField(max_length=36, blank=True)

@@ -31,7 +31,7 @@ _PROVIDER_STATE_LABELS = {
     "running": "MinerU 解析中",
     "converting": "MinerU 转换中",
     "downloading": "下载 MinerU 结果",
-    "normalizing": "转换 PLAB 结构",
+    "normalizing": "转换文献结构",
     "chunking": "生成文本片段",
     "overview": "生成 AI Overview",
     "complete": "处理完成",

@@ -11,7 +11,6 @@ from django.utils import timezone
 from django.utils.text import slugify
 
 from apps.box_upload.services import LiteratureStorageError
-from apps.box_upload.storage import NAS_WEBDAV
 
 from .ai_enrichment import SkillEnrichmentError, generate_skill_enrichment
 from .models import GitHubSkillSource, SharedSkill, SharedSkillRelease, SkillCandidate, SkillPurpose, SkillSyncJob
@@ -426,7 +425,7 @@ def publish_candidate(candidate, reviewer, formal_storage=None, candidate_storag
             SharedSkillRelease.objects.create(
                 skill=skill,
                 git_commit=revision,
-                storage_backend=NAS_WEBDAV,
+                storage_backend=formal_storage.name,
                 repository_id="",
                 archive_name=archive_name,
                 archive_remote_path=remote_path,

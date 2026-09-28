@@ -99,6 +99,7 @@ class UploadedDocument(models.Model):
         SUPPLEMENTARY = "supplementary", "Supplementary material"
 
     class StorageBackend(models.TextChoices):
+        LOCAL = "local", "Local filesystem"
         NAS_WEBDAV = "nas_webdav", "NAS WebDAV"
 
     class Status(models.TextChoices):

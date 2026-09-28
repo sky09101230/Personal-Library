@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}上传 PDF | PLAB{% endblock %}
+{% block title %}上传 PDF | Personal{% endblock %}
 {% block content %}
 <style>
   .upload-channel-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 12px; }
@@ -27,7 +27,7 @@
   .missing-journal .metadata-issue, .title-mismatch .metadata-issue { color: #8a5b00; }
   .metadata-editor { display: flex; align-items: stretch; gap: 4px; }
   .metadata-editor input { flex: 1 1 0; min-width: 0; width: auto; box-sizing: border-box; border: 1px solid #cfd4df; border-radius: 4px; padding: 6px; font: inherit; font-size: 12px; }
-  .metadata-editor button { flex: 0 0 auto; border: 1px solid #c8b8d4; border-radius: 4px; padding: 6px 8px; background: #fff; color: var(--accent); cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; }
+  .metadata-editor button { flex: 0 0 auto; border: 1px solid #b8d0c0; border-radius: 4px; padding: 6px 8px; background: #fff; color: var(--accent); cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; }
   .metadata-editor button:disabled { opacity: .5; cursor: wait; }
   .metadata-summary { color: var(--muted); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
   .metadata-row-message { min-height: 15px; margin-top: 3px; color: var(--danger); font-size: 10px; }
@@ -40,9 +40,9 @@
 </style>
 
 <div class="page-head">
-  <p class="eyebrow">PLAB Literature · NAS</p>
+  <p class="eyebrow">Personal Literature</p>
   <h1>上传 PDF 文献</h1>
-  <p class="subtle">PDF 先暂存到 NAS；请在本页核对解析结果，确认后才写入正式文献库。</p>
+  <p class="subtle">PDF 先暂存到文件库；请在本页核对解析结果，确认后才写入正式文献库。</p>
 </div>
 <div class="panel upload-grid">
   <div>
@@ -176,7 +176,7 @@
       fileProgress[fileIndex] = value;
       channel.bar.style.width = `${value}%`;
       channel.value.textContent = `${value}%`;
-      if (value === 100) channel.state.textContent = '服务端解析 metadata 与 NAS 暂存';
+      if (value === 100) channel.state.textContent = '服务端解析 metadata 与文件暂存';
       updateOverallProgress();
     };
     request.onload = () => {
@@ -367,7 +367,7 @@
     if (!currentBatch) return;
     cancelButton.disabled = true;
     confirmButton.disabled = true;
-    batchStatus.textContent = '正在清理 NAS 暂存文件';
+    batchStatus.textContent = '正在清理暂存文件';
     try {
       const payload = await post(`/upload/batches/${currentBatch}/cancel/`);
       batchStatus.textContent = payload.message;

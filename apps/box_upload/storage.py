@@ -14,6 +14,7 @@ from .services import LiteratureStorageError
 
 NJU_BOX = "nju_box"  # 历史数据库值；运行时已废弃。
 NAS_WEBDAV = "nas_webdav"
+LOCAL = "local"
 ORIGINALS_NAMESPACE = "originals"
 PARSE_ARTIFACT_NAMESPACE = "derived/parses"
 _SAFE_EXTENSION = re.compile(r"^\.[A-Za-z0-9]{1,10}$")
@@ -320,6 +321,9 @@ class NasWebDavLiteratureStorage(LiteratureStorage):
 
 def get_literature_storage(backend=None):
     backend = (backend or os.environ.get("LITERATURE_STORAGE_BACKEND") or NAS_WEBDAV).strip().lower()
+    if backend == LOCAL:
+        from .local_storage import LocalLiteratureStorage
+        return LocalLiteratureStorage()
     if backend == NAS_WEBDAV:
         return NasWebDavLiteratureStorage()
     if backend == NJU_BOX:

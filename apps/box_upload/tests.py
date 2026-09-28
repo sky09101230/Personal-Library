@@ -38,7 +38,7 @@ class UploadPageTests(TestCase):
 
     def test_upload_page_loads(self):
         response = self.client.get("/upload/")
-        self.assertContains(response, "PLAB Literature")
+        self.assertContains(response, "Personal Literature")
         self.assertContains(response, 'multiple')
         self.assertContains(response, "const MAX_CHANNELS = 4")
         self.assertContains(response, "本批 metadata 审核")

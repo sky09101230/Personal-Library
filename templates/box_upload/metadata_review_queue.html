@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block title %}Metadata 审核队列 | PLAB{% endblock %}
+{% block title %}Metadata 审核队列 | Personal{% endblock %}
 {% block content %}
 {% if messages %}
   {% for message in messages %}<div class="notice {{ message.tags }}" role="status">{{ message }}</div>{% endfor %}
 {% endif %}
 <div class="page-head review-queue-head">
   <div>
-    <p class="eyebrow">PLAB Literature</p>
+    <p class="eyebrow">Personal Literature</p>
     <h1>快速审核 AI Metadata</h1>
     <p class="subtle">先在列表核对核心字段；没有问题的可勾选后集中确认，需要修改的再进入详情。</p>
   </div>

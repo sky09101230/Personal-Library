@@ -72,8 +72,8 @@ def _pdf_fallback_metadata(evidence):
         "title": str(evidence.get("title") or "").strip(),
         "authors": [author if isinstance(author, dict) else {"name": author} for author in authors],
         "abstract": "",
-        "journal": "",
-        "publication_year": None,
+        "journal": str(evidence.get("journal") or "").strip(),
+        "publication_year": evidence.get("publication_year"),
         "doi": normalize_doi(evidence.get("doi")),
         "source_tags": [],
         "metadata_source": "pdf",
@@ -86,6 +86,8 @@ def _bibtex_preview(doi, raw_bibtex=None):
         raise MetadataResolutionError("请输入有效 DOI。")
     raw_bibtex = raw_bibtex or fetch_doi_bibtex(doi)
     _, metadata = parse_bibtex_metadata(raw_bibtex, expected_doi=doi)
+    if normalize_doi(metadata.get("doi")) != doi:
+        raise MetadataResolutionError("元数据返回的 DOI 与请求不一致，未采用该记录。")
     metadata["doi"] = doi
     metadata["metadata_source"] = "bibtex"
     return metadata, {
@@ -112,6 +114,9 @@ def _preview_pdf(uploaded_file):
             preview_evidence["bibtex"] = bibtex_evidence
     except MetadataResolutionError as exc:
         preview_evidence["provider_error"] = str(exc)
+        if len(evidence.get("doi_candidates") or []) > 1:
+            # Do not present a reference-list DOI as the article's verified DOI.
+            metadata["doi"] = ""
     uploaded_file.seek(0)
     return metadata, preview_evidence
 

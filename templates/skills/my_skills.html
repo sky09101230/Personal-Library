@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}My Skills | PLAB{% endblock %}
+{% block title %}My Skills | Personal{% endblock %}
 {% block content %}
 <div class="page-head"><p class="eyebrow">Personal Capability Set</p><h1>My Skills</h1><p class="subtle">管理当前属于你的正式 Skill；停用只影响你自己的 Agent 能力集合。</p></div>
 <nav class="skills-subnav" aria-label="Skills 导航"><a href="{% url 'skills-index' %}">Discover</a><a class="active" href="{% url 'skills-library' %}">My Skills</a><a href="{% url 'skills-featured' %}">管理员精选</a><a href="{% url 'skills-submit-candidate' %}">投稿 Skill</a><a href="{% url 'skills-candidates' %}">{% if request.user.is_staff %}候选审核{% else %}我的投稿{% endif %}</a></nav>

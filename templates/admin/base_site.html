@@ -1,5 +1,31 @@
 {% extends "admin/base.html" %}
-{% block title %}PLAB Admin{% endblock %}
+{% block title %}Personal Admin{% endblock %}
+{% block extrastyle %}
+{{ block.super }}
+<style>
+  :root, html[data-theme="light"], html[data-theme="dark"] {
+    --primary: #1b5340;
+    --secondary: #123b2d;
+    --accent: #eaf3ed;
+    --header-color: #eaf3ed;
+    --header-branding-color: #fff;
+    --header-bg: #123b2d;
+    --breadcrumbs-bg: #1b5340;
+    --button-bg: #1b5340;
+    --button-hover-bg: #123b2d;
+    --default-button-bg: #1b5340;
+    --default-button-hover-bg: #123b2d;
+    --link-fg: #1b5340;
+    --link-hover-color: #123b2d;
+    --link-selected-fg: #1b5340;
+    --selected-row: #eaf3ed;
+  }
+  html[data-theme="dark"] { --link-fg: #8fceb0; --link-hover-color: #c0e8d3; --link-selected-fg: #8fceb0; --selected-row: #203c30; }
+  @media (prefers-color-scheme: dark) {
+    html[data-theme="auto"] { --link-fg: #8fceb0; --link-hover-color: #c0e8d3; --link-selected-fg: #8fceb0; --selected-row: #203c30; }
+  }
+</style>
+{% endblock %}
 {% block branding %}
-<h1 id="site-name"><a href="/">PLAB Scientific Workspace</a></h1>
+<h1 id="site-name"><a href="/">Personal Knowledge Library</a></h1>
 {% endblock %}

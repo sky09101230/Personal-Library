@@ -19,6 +19,7 @@ from .metadata_jobs import _download_source_pdf
 
 class NasWebDavLiteratureStorageTests(SimpleTestCase):
     config = {
+        "LITERATURE_STORAGE_BACKEND": "nas_webdav",
         "NAS_WEBDAV_BASE_URL": "https://nas.example.test:5006",
         "NAS_WEBDAV_USERNAME": "service-user",
         "NAS_WEBDAV_PASSWORD": "service-password",

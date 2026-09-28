@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ literature.title|default:"文献详情" }} | PLAB{% endblock %}
+{% block title %}{{ literature.title|default:"文献详情" }} | Personal{% endblock %}
 {% block content_class %}content-wide{% endblock %}
 {% block content %}
 <nav class="detail-back" aria-label="返回"><a href="{% url 'library' %}">← 文献库</a></nav>

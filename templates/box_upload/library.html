@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}{% if is_my_uploads %}我的文献{% else %}文献库{% endif %} | PLAB{% endblock %}
+{% block title %}{% if is_my_uploads %}我的文献{% else %}文献库{% endif %} | Personal{% endblock %}
 {% block content_class %}content-wide{% endblock %}
 {% block content %}
 <div class="page-head">
-  <p class="eyebrow">{% if is_my_uploads %}My Library{% else %}PLAB Literature{% endif %}</p>
+  <p class="eyebrow">{% if is_my_uploads %}My Library{% else %}Personal Literature{% endif %}</p>
   <h1>{% if is_my_uploads %}我的文献{% else %}文献库{% endif %}</h1>
   <p class="subtle">{% if is_my_uploads %}包括你实际上传的 PDF，也包括通过 DOI 或 Zotero 关联到你的文献；你只能审核和删除自己实际提交的附件。{% else %}集中查看核心 metadata、处理状态和常用操作；待复核内容不会自动进入 Agent 上下文。{% endif %}</p>
 </div>

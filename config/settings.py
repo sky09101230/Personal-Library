@@ -74,7 +74,11 @@ ASGI_APPLICATION = "config.asgi.application"
 
 database_engine = os.environ.get("AGENTSYS_DB_ENGINE", "sqlite").strip().lower()
 if database_engine == "sqlite":
-    DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
+    DATABASES = {"default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
+        "OPTIONS": {"transaction_mode": "IMMEDIATE", "timeout": 30},
+    }}
 elif database_engine == "postgresql":
     postgres_settings = {
         "NAME": os.environ.get("AGENTSYS_DB_NAME", "").strip(),
@@ -108,4 +112,4 @@ DOI_RESOLVER_URL = os.environ.get("DOI_RESOLVER_URL", "https://doi.org").rstrip(
 CROSSREF_API_URL = os.environ.get("CROSSREF_API_URL", "https://api.crossref.org").rstrip("/")
 CROSSREF_MAILTO = os.environ.get("CROSSREF_MAILTO", "")
 ZOTERO_API_URL = os.environ.get("ZOTERO_API_URL", "https://api.zotero.org").rstrip("/")
-METADATA_HTTP_TIMEOUT = float(os.environ.get("METADATA_HTTP_TIMEOUT", "5"))
+METADATA_HTTP_TIMEOUT = float(os.environ.get("METADATA_HTTP_TIMEOUT", "15"))

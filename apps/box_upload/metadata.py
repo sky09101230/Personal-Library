@@ -32,7 +32,7 @@ GENERATED_PDF_TITLE_PATTERN = re.compile(
 )
 NUMBERED_AUTHOR_PATTERN = re.compile(
     r"\b([A-Z][A-Za-z.\-']+(?:\s+[A-Z][A-Za-z.\-']+){1,3})"
-    r"(?=\d+\s*[*\u2020\u2217,]?(?:\s|$))"
+    r"(?=,?\d+(?:,\d+)*\s*[*\u2020\u2217,]?(?:\s|$))"
 )
 
 
@@ -87,6 +87,13 @@ def extract_pdf_evidence(uploaded_file):
                         evidence["title"] = page_title
                 if page_index == 0 and not evidence["authors"]:
                     evidence["authors"] = _extract_first_page_authors(text)
+                if page_index == 0 and "Publication details:" in text:
+                    # Institutional cover sheets contain a citation, not the article's DOI.
+                    citation = text.split("Publication details:", 1)[1].split("Citing this paper", 1)[0]
+                    journal = re.search(r"\.\s+([^\n.]+?),\s*\d+\(\d+\)", citation)
+                    year = re.search(r"\((20\d{2}|19\d{2})\)", citation)
+                    evidence["journal"] = _clean_text(journal.group(1)) if journal else ""
+                    evidence["publication_year"] = int(year.group(1)) if year else None
                 page_dois = _extract_dois(text)
                 evidence["page_numbers_scanned"].append(page_index + 1)
                 evidence["pages"].append({
@@ -118,6 +125,33 @@ def extract_pdf_evidence(uploaded_file):
 
 
 def fetch_doi_bibtex(doi):
+    try:
+        return _fetch_resolver_bibtex(doi)
+    except MetadataResolutionError:
+        base_url = settings.CROSSREF_API_URL.rstrip("/")
+        parts = urlsplit(base_url)
+        if parts.scheme != "https" or not parts.netloc:
+            raise MetadataResolutionError("Crossref API URL must be a valid HTTPS URL.")
+        request = Request(
+            f"{base_url}/works/{quote(normalize_doi(doi), safe='/')}/transform/application/x-bibtex",
+            headers={"Accept": "application/x-bibtex", "User-Agent": _metadata_user_agent()},
+        )
+        try:
+            with urlopen(request, timeout=settings.METADATA_HTTP_TIMEOUT) as response:
+                payload = response.read(BIBTEX_RESPONSE_LIMIT + 1)
+            if len(payload) > BIBTEX_RESPONSE_LIMIT:
+                raise ValueError("Response too large")
+            bibtex = payload.decode("utf-8-sig")
+            # Validate identity before allowing a fallback record into candidate matching.
+            _, metadata = parse_bibtex_metadata(bibtex, expected_doi=doi)
+            if normalize_doi(metadata["doi"]) != normalize_doi(doi):
+                raise ValueError("DOI mismatch")
+            return bibtex
+        except Exception as exc:
+            raise MetadataResolutionError("DOI 和 Crossref 元数据查询均失败，请稍后重试。") from exc
+
+
+def _fetch_resolver_bibtex(doi):
     base_url = settings.DOI_RESOLVER_URL.rstrip("/")
     base_parts = urlsplit(base_url)
     if base_parts.scheme != "https" or not base_parts.netloc:
@@ -199,8 +233,16 @@ def select_pdf_doi(evidence, bibtex_fetcher=None):
             "page": candidate.get("page"),
         }
 
-    with ThreadPoolExecutor(max_workers=min(8, len(candidates))) as executor:
-        matches = [match for match in executor.map(resolve_candidate, candidates) if match]
+    first_page_candidate = candidates[0].get("page") == 1
+    first_match = resolve_candidate(candidates[0]) if first_page_candidate else None
+    if first_match and first_match["title_similarity"] >= 0.95 and first_match["has_publication_container"]:
+        matches = [first_match]
+    else:
+        remaining = candidates[1:] if first_page_candidate else candidates
+        with ThreadPoolExecutor(max_workers=min(4, len(remaining))) as executor:
+            matches = [match for match in executor.map(resolve_candidate, remaining) if match]
+        if first_match:
+            matches.append(first_match)
 
     if not matches:
         raise MetadataResolutionError("No PDF DOI candidate returned matching BibTeX metadata.")
@@ -605,6 +647,14 @@ def _extract_first_page_title(text):
     lines = [line for line in lines if line]
     title_lines = []
     for line in lines[:20]:
+        if not title_lines and (
+            re.match(r"^(?:Letter\s+Vol\.|Open Access\s*$)", line, re.IGNORECASE)
+        ):
+            continue
+        if title_lines and re.match(r"^(?:Published:|Document Version:|Citation:|Received\b)", line, re.IGNORECASE):
+            break
+        if title_lines and ";" in line and re.match(r"^[A-Z][A-Za-z'-]+,\s+[A-Z]", line):
+            break
         if re.match(r"^(?:abstract|\u6458\u8981)\b", line, re.IGNORECASE):
             break
         if title_lines and (_looks_like_pdf_author_line(line) or _looks_like_numbered_author_line(line)):
@@ -630,6 +680,8 @@ def _extract_first_page_authors(text):
     started = False
     authors = []
     for line in lines[:20]:
+        if ";" in line and re.match(r"^[A-Z][A-Za-z'-]+,\s+[A-Z]", line):
+            return [_bibtex_author_name(name.strip()) for name in line.split(";") if name.strip()]
         if re.match(r"^(?:abstract|\u6458\u8981)\b", line, re.IGNORECASE):
             break
         numbered = _looks_like_numbered_author_line(line)
@@ -651,7 +703,7 @@ def _first(value):
 
 
 def _clean_text(value):
-    return " ".join(str(value or "").replace("\x00", " ").split())
+    return " ".join(unescape(str(value or "")).replace("\x00", " ").split())
 
 
 def _metadata_user_agent():
