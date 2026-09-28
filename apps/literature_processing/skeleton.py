@@ -63,6 +63,17 @@ def generate_skeleton(document_parse, user, *, provider=None, force=False, reque
             result = provider("overview", messages, output_mode="json")
         payload = json.loads(result.content if hasattr(result, "content") else result)
         payload = _sanitize_payload(payload)
+        if not _has_claims(payload):
+            retry_context = dict(provider_context)
+            retry_context["task"] = "Return exactly the requested JSON shape. Include at least one supported claim only when an evidence_id in the supplied items supports it; otherwise use insufficient_evidence."
+            retry_messages = [{"role": "system", "content": _prompt()},
+                              {"role": "user", "content": json.dumps(retry_context, ensure_ascii=False)}]
+            try:
+                retry_result = provider("overview", retry_messages, output_mode="json", max_tokens=1024)
+            except TypeError:
+                retry_result = provider("overview", retry_messages, output_mode="json")
+            result = retry_result
+            payload = _sanitize_payload(json.loads(retry_result.content if hasattr(retry_result, "content") else retry_result))
         validate_skeleton_payload(payload)
         allowed = context.get("allowed_evidence_ids", [])
         for section in payload["sections"].values():
@@ -162,6 +173,13 @@ def _sanitize_payload(payload):
             figure["claims"] = []
             figure["status"] = "insufficient_evidence"
     return payload
+
+
+def _has_claims(payload):
+    return isinstance(payload, dict) and any(
+        isinstance(section, dict) and section.get("claims")
+        for section in (payload.get("sections") or {}).values()
+    )
 
 
 def _prompt():
