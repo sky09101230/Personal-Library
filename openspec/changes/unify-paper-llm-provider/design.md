@@ -20,7 +20,7 @@ overview_provider.py 当前向 base_url/chat/completions 发送 DeepSeek thinkin
 
 ## Risks
 
-本机 Cockpit 是否支持 JSON/vision 尚未实测。接口兼容是契约目标，不是现状结论。重试可能重复计费，限制尝试且不把部分输出存为成功。HTTPS 私有服务如需访问由管理员配置，不开放用户驱动 URL。
+2026-09-28 已通过原始 HTTP 对本机 Cockpit 的 gpt-6-luna 验证文本、JSON mode 与合成图片，认证配置来自未提交的 .env；三项均 HTTP 200、finish_reason=stop。该环境证据不代表本 Change 中尚未实现的 transport、安全校验和错误处理已完成，实施后须经新入口复验。其它模型与完整输入窗口仍按实际配置验证。重试可能重复计费，限制尝试且不把部分输出存为成功。HTTPS 私有服务如需访问由管理员配置，不开放用户驱动 URL。
 
 ## Validation
 

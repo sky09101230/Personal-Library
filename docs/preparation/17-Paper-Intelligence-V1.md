@@ -6,7 +6,7 @@
 
 复用 Python 3.13、Django 5.2、urllib/json/hashlib/zipfile/tempfile、现有本地/NAS storage、PyPDF/MinerU 的 normalized/raw artifact、LiteratureChunk、DocumentAnalysis、登录/CSRF 与原生 PDF 流。V1 无新增 pip 服务依赖，不需要 OpenAI SDK、Redis、Celery、Qdrant、Milvus 或 SQLite FTS。若后续图片尺寸校验确需库，编码前单独论证依赖，不能隐式安装。
 
-仅管理员配置 PAPER_LLM_* 与三个 model role；兼容旧 DEEPSEEK_*。本机候选 endpoint 为 http://localhost:53347/v1，不把它硬编码为生产默认，不存任何真实 key。不在本阶段连接模型、读取本机论文、操作数据库、创建 migration 或修改 .env。
+仅管理员配置 PAPER_LLM_* 与三个 model role；兼容旧 DEEPSEEK_*。本机候选 endpoint 为 http://localhost:53347/v1，不把它硬编码为生产默认，不在仓库保存任何真实 key。初次设计阶段不连接模型、读取本机论文、操作数据库、创建 migration 或修改 .env；后续按用户要求的前置验证仅使用用户自行填写的 .env 做合成 API smoke，不读取论文或创建功能 migration，详见文末复核结果。
 
 ## 实施前必须核实
 
@@ -71,3 +71,11 @@
 “按 docs/decisions/0045 与 preparation/17，依序实施六个 Paper Intelligence V1 Changes；先满足各自验收与迁移兼容要求，每项通过后立即提交。禁止扩大到全库 RAG 或外网 research。沿用已定义 Evidence/ContextPacket 契约；最终验证端到端与旧 Overview/PDF 回归，明确报告真实 provider 和 PostgreSQL 未验证项。”
 
 本轮不创建或启动该 Goal。
+
+## 2026-09-28 前置问题复核
+
+历史场景继承与跨页 chunk 规范已修复，全仓 OpenSpec strict 33/33 通过。当前 Django check、makemigrations --check --dry-run、migrate --check 通过；完整回归 369 项中 362 通过、7 项因 NJU Box 已退役而按既有 skip 跳过。
+
+本机代理经用户配置的 .env 认证后，模型列表及 gpt-6-luna 文本/JSON/合成图片 smoke 通过。这里只记录实际测试能力，不写入默认业务模型，不声称完整 context window 或真实论文质量已验证。新 provider 实现后仍需从其入口复验；当前模型 role 配置由实施阶段选择并验证。
+
+本机 127.0.0.1:5432 探测不可达，PATH 未发现 psql/pg_ctl/postgres/docker；未声明不存在其它位置或远端 PostgreSQL，只能确认当前未提供可用测试环境。SQLite 路径已验证；PostgreSQL migration/concurrency 仍为部署到 PostgreSQL 前的硬验收项。新 Chat/Skeleton 的迁移、UI、安全失败路径和语义质量属于对应 Change 实施后的验收，不能在无实现时提前勾选。

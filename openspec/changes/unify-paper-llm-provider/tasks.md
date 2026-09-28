@@ -12,4 +12,4 @@
 
 - [ ] 3.1 新增 test_llm：路径/URL 攻击/能力/缺配置/401/429/5xx/timeout/空/截断/无 usage/泄密断言。
 - [ ] 3.2 运行旧 test_overview、Django check、makemigrations --check --dry-run 和本 Change strict validation。
-- [ ] 3.3 以合成输入执行本机代理 smoke，记录实际支持能力；无服务时明确标未验证，不勾选此项。
+- [ ] 3.3 实施后通过新 provider 入口以合成输入复验本机代理 smoke，记录实际支持能力；2026-09-28 原始 HTTP 环境探测已通过，但不能代替尚未实现的新入口验收，无服务时明确标未验证。

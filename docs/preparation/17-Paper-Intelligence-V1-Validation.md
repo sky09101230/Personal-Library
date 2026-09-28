@@ -2,6 +2,41 @@
 
 日期：2026-09-28。审计基线：`382bcd2`。本记录仅证明设计包的结构与一致性检查，不证明功能已实现。
 
+## 当前状态（历史清理与环境复核后）
+
+全仓 OpenSpec strict 已 **33 通过、0 失败**；下文首次交付的 30/3 是保留的历史记录，不是当前状态。历史修复提交为 db893be（场景继承）与 a0b9499（跨页 chunk 规范）。
+
+| 当前可验证项 | 结果 |
+| --- | --- |
+| 三个历史 Change 的场景继承 | 修复并 strict 通过；保留原场景名称，按当前条件修订，明确 batch 先于 review 归档 |
+| v1/v2 chunk 规范 | spec/design 已区分页内与跨页；临时合成两页测试验证 source_spans 的 page 和 offsets 精确 |
+| Django check | 通过，无问题 |
+| makemigrations --check --dry-run | 通过，No changes detected |
+| migrate --check | 通过，无待应用迁移；未执行生产迁移 |
+| 全量现有测试 | 369 项，362 通过、7 跳过，0 失败；80.748 秒 |
+| 跳过原因 | 7 项均为既有 NJU Box backend retired，不是新功能测试被跳过 |
+| Cockpit 连通与认证 | localhost:53347 端口可达；无认证 /models=401，.env 配置 Bearer 后 /models=200 |
+| 文本 smoke | gpt-6-luna，HTTP 200，stop，精确 PROBE_OK，usage 存在，4.79 秒 |
+| JSON smoke | gpt-6-luna，HTTP 200，stop，合法 JSON 且保持合成 evidence ID，4.83 秒 |
+| Vision smoke | gpt-6-luna，HTTP 200，stop，正确识别临时 PNG 左红右蓝，4.63 秒 |
+
+API smoke 使用 /v1/chat/completions、temperature=0、max_tokens=256；JSON 和 vision 请求启用 response_format=json_object，vision 为内存合成 PNG 的 data URL。测试未发送论文或真实实验内容，未输出/保存 API key；.env 被 Git 忽略。gpt-6-luna 来自实际 /models 返回，不是猜测模型名；它只是本次 smoke 选择，不自动成为三个业务 role 的默认配置。
+
+完整 Django 测试沿用项目 .venv，通过仅测试进程的 MINERU_REALTIME_API_TOKEN=" " 隔离本机专用 token；不修改真实 .env。Windows 子进程空字符串可能移除变量，使 settings 从 .env 再次装载真实 token，因此用空白字符串让业务 strip 后为空。此前唯一环境相关失败已在本次完整回归中消除，非仅单项补测。
+
+## 剩余验收项的准确分类
+
+| 项目 | 当前状态 | 完成条件 |
+| --- | --- | --- |
+| PostgreSQL 现有/新增迁移与并发 | 环境未提供：5432 不可达，PATH 无 psql/pg_ctl/postgres/docker | 提供可用、可丢弃的测试实例后执行；不能推定其它路径/远端没有 PostgreSQL |
+| 新统一 provider 安全/错误处理 | 尚未实现，原始 HTTP smoke 不能代替 | A 实现后从新入口跑 mock 矩阵与真实代理复验 |
+| 完整输入窗口/其它模型 | 本次小输入 smoke 未验证 | 选定 profile 的模型与窗口配置，验证预算、超限和输出行为 |
+| Chat/Skeleton migration、Evidence validator、跨语言 retrieval | 尚未实现 | B/C/D/E 各自 tasks 的合成测试与增量迁移验收 |
+| 新阅读器浏览器闭环 | 尚未实现；当前 8001 未监听 | F 实现后启动测试环境并验证证据、图、caption、chunk/PDF 导航 |
+| 真实论文语义支持度 | 无功能实现，不能由简单 smoke 推断 | 实施后按准备文档使用授权论文逐条核验，不提交原始资料 |
+
+上表属于明确的外部环境条件或实施后验收，不再笼统列作“已存在但未检查的历史问题”。不启动新功能编码，也不把这些项目标为已完成。
+
 ## 交付清单
 
 - [整体架构、审计与依赖图](../decisions/0045-paper-intelligence-v1.md)
@@ -15,7 +50,7 @@
 
 每个 Change 均包含 .openspec.yaml、proposal.md、design.md、tasks.md、specs/<capability>/spec.md。总计 40 条 Requirements、94 个 Scenarios、51 个未完成实施任务。没有标记任何实现任务为完成。
 
-## CLI 验证
+## 首次设计交付的 CLI 验证（历史记录）
 
 本机 OpenSpec 1.13.1，使用 PowerShell 可执行的 openspec.cmd；无需初始化或更新工具层。
 
@@ -39,7 +74,7 @@
 | organize-literature-storage-and-cli | MODIFIED “NAS WebDAV 适配器保护凭据和路径” 缺“上传对象”场景 |
 | review-upload-metadata-before-commit | 上述 publication requirement 同样缺两场景，另“文件上传和元数据处理解耦”缺“元数据处理失败”场景 |
 
-这三项为历史规范缺口，未在本轮改写；不能将全仓校验报告为通过。后续归档涉及旧能力前应单独解决，不能仅为消除错误直接复制可能与新行为冲突的旧场景。
+首次设计交付保留了上述三个历史规范缺口；随后按用户要求已修复，当前全仓 33/33 通过。修复保留了“确认后发布”、暂存失败可重试和 namespace 接口兼容，没有直接复制会恢复旧发布语义的场景内容。
 
 ## 跨 Change 一致性复核
 
@@ -62,9 +97,9 @@
 
 发现并在最终复核中对齐的设计细节：PaperAnalysisRun 明确 request_id 字段与唯一范围；Skeleton 查询缓存不先调用模型；多模型/多批次 provenance 不只保留最终模型；vision 纳入总调用数与耗时预算。
 
-另有已记录的历史漂移：旧 add-literature-processing-phase-1 spec 写“chunk 不跨页”，当前 structure_chunking 已合法跨页。本轮新 Evidence 明确按 span 解释，不回退当前代码；旧 Change 归档前需独立处理。
+首次设计交付记录的“chunk 不跨页”漂移已在后续清理中修复：旧 Change 的 spec/design 现在明确 v1 页内、v2 结构跨页并逐段溯源；未改动运行代码。
 
-## 文档质量与范围
+## 首次设计交付的文档质量与范围（历史记录）
 
 - 文件完整性、Markdown 本地链接存在性、task checkbox 状态检查通过。
 - `git diff --check` 通过。
@@ -72,9 +107,9 @@
 - 没有修改 Python、模板、依赖、运行配置或数据库；没有创建 migration，没有读取/覆盖科研资料，没有调用真实 LLM，没有启动 Goal。
 - 已按独立设计单元创建本地 Git 提交；本轮未请求推送，未推送这些新提交。
 
-## 未验证与下一步
+## 实施后验收与下一步
 
-尚未执行新功能单元/集成测试、migration、真实 Cockpit/DeepSeek API、视觉推理、浏览器阅读闭环、PostgreSQL 并发或真实论文语义评测，因为本轮不实现代码。CLI strict 检查不替代上述验收。
+新功能单元/集成测试、migration、浏览器阅读闭环、PostgreSQL 并发和真实论文语义评测仍需依赖实现或外部环境。当前旧功能完整回归及 Cockpit 合成文本/JSON/vision 环境验证已完成，详情见本文顶部；没有独立测试 DeepSeek 真实服务，因为本次选择本机 Cockpit 作为后续新能力候选，旧 DeepSeek 路径仅通过现有 mock 回归。CLI strict 检查和代理小样本 smoke 均不替代新功能验收。
 
 真实 Evidence ID 只能证明来源真实与可访问，不能自动保证语义蕴含；实施验收必须逐条人工核查重要 claim。默认同步 90 秒和批次数上限是初始设计预算，长文可能只得到明确 partial 结果，不能承诺任意长度论文的一次性完整分析。
 

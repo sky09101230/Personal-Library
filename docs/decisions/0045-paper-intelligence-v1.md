@@ -46,9 +46,9 @@ V1 验收门槛：
 
 已检查 tests/test_parsing、test_mineru_adapter、test_jobs、test_models、test_overview、test_views，以及 box_upload PDF 流测试和 MCP 发布过滤代码。已有测试覆盖：v1/v2、585 页分段、bbox、跨页 chunk、原始 bundle、parse 保留、Overview 跨 parse/页码校验、失败保留原 PDF、双语 UI；尚无统一 Evidence、图片读取、跨语言检索、Chat、Skeleton 和它们的权限/预算测试。
 
-OpenSpec 为 spec-driven，现有 Change 通常含 .openspec.yaml、proposal/design/tasks、specs/*/spec.md。旧 `add-literature-processing-phase-1` 已全部勾选但未归档，其“chunk 不跨页”文字已落后于当前 structure chunker。本轮新增 capability 不重写它；新 Evidence 明确支持 span 级跨页溯源，后续归档旧 Change 前必须处理此历史漂移，不能用旧句子回退当前实现。
+OpenSpec 为 spec-driven，现有 Change 通常含 .openspec.yaml、proposal/design/tasks、specs/*/spec.md。旧 `add-literature-processing-phase-1` 已全部勾选但未归档，审计发现其“chunk 不跨页”文字落后于当前 structure chunker。2026-09-28 后续清理已将其 spec/design 对齐为 v1 页内、v2 按 source_spans 支持跨页，并用合成两页输入验证精确 offsets；旧 Overview 仍只链接 chunk 起始页，新 Evidence 才负责精确 span 引用。
 
-全仓 strict 基线为 24 通过、3 失败，失败属于既有提案场景缺失，详见验证记录；本轮不扩展修复无关提案。
+全仓 strict 初始基线为 24 通过、3 失败；新增六项后为 30 通过、3 失败。2026-09-28 经用户要求清理历史场景继承问题后，现为 33 通过、0 失败。修复保留原 Scenario 标识并明确确认后发布的条件与 Change 归档顺序，未恢复旧自动发布语义，详见验证记录。
 
 ## 3. 数据流与模块归属
 
@@ -120,7 +120,7 @@ base URL 定义为 API 根路径：`http://localhost:53347/v1` → `/v1/chat/com
 
 设置响应体上限与请求总 deadline；429/5xx/网络错误最多 1 次有界重试，401/403/非法配置不重试。空输出、length 截断、非 JSON、能力不支持、无 usage 都有明确行为。vision 使用 B 已验证的有限图片字节，不传任意图片 URL；V1 默认 caption+正文解读，配置 vision 后可附加图片，必须标示解释模式，视觉结论仍是带 Figure ID 的派生解释。
 
-本轮不调用 Cockpit 或外部模型；真实兼容性、认证、JSON mode 与 vision 支持均待后续小型 smoke 验证。
+设计初次交付未调用模型。2026-09-28 后续环境验收从用户配置的 .env 读取认证，已在 http://localhost:53347/v1 对 gpt-6-luna 完成模型列表、文本、JSON mode 和合成图片 smoke，均通过；未发送真实论文。该结果仅验证本机代理及该模型的基础协议，不代表尚未实现的统一 provider、完整模型输入窗口或科研语义效果已验收。
 
 ## 6. Retrieval 与结构 context
 
