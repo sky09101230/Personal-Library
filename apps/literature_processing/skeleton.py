@@ -71,10 +71,11 @@ def generate_skeleton(document_parse, user, *, provider=None, force=False, reque
         for figure in payload["figures"]:
             for claim in figure.get("claims", []):
                 validate_claims(catalog, [claim], allowed)
+        run_nonce = run.generation_nonce
         analysis = DocumentAnalysis.objects.create(document_parse=document_parse, analysis_type=DocumentAnalysis.AnalysisType.PAPER_SKELETON,
             schema_version=SKELETON_SCHEMA_VERSION, provider=getattr(result, "provider", "paper"),
             model=getattr(result, "returned_model", ""), prompt_version=SKELETON_PROMPT_VERSION,
-            input_fingerprint=hashlib.sha256(json.dumps(context, sort_keys=True, ensure_ascii=False).encode()).hexdigest(), payload=payload)
+            input_fingerprint=hashlib.sha256(json.dumps({"context": context, "nonce": run_nonce}, sort_keys=True, ensure_ascii=False).encode()).hexdigest(), payload=payload)
         run.result = analysis
         run.status = PaperAnalysisRun.Status.SUCCEEDED
         run.provider = getattr(result, "provider", "paper")
