@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from .versions import PROMPT_VERSION
+from .llm import LLMError, complete, load_config
 
 
 DEFAULT_BASE_URL = "https://api.deepseek.com"
@@ -19,6 +20,8 @@ class OverviewGenerationError(RuntimeError):
 
 
 def generate_deepseek_overview(packet, *, request_func=None):
+    if os.environ.get("PAPER_OVERVIEW_MODEL", "").strip():
+        return _generate_paper_overview(packet, request_func=request_func)
     api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     if not api_key:
         raise OverviewGenerationError("disabled", "DeepSeek API key is not configured.")
@@ -78,6 +81,28 @@ def generate_deepseek_overview(packet, *, request_func=None):
             if not exc.retryable or attempt == 1:
                 raise
     raise last_error
+
+
+def _generate_paper_overview(packet, *, request_func=None):
+    try:
+        config = load_config()
+        result = complete(
+            "overview",
+            [{"role": "system", "content": _system_prompt()},
+             {"role": "user", "content": "Document chunks JSON:\n" + json.dumps(packet, ensure_ascii=False)}],
+            output_mode="json",
+            config=config,
+            request_func=request_func,
+        )
+        return {
+            "payload": json.loads(result.content),
+            "provider": result.provider,
+            "model": result.returned_model or result.requested_model,
+            "prompt_version": PROMPT_VERSION,
+            "attempt_count": result.attempt_count,
+        }
+    except LLMError as exc:
+        raise OverviewGenerationError(exc.code, str(exc), retryable=exc.retryable) from exc
 
 
 def _post_json(url, body, api_key, timeout):
