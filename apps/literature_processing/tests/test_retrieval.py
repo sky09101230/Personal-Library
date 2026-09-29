@@ -3,7 +3,7 @@ from unittest.mock import Mock
 from django.test import SimpleTestCase
 
 from ..evidence import Evidence, EvidenceCatalog
-from ..paper_context import ContextError, build_context_packet, build_skeleton_inventory
+from ..paper_context import ContextError, build_context_packet, build_skeleton_inventory, build_skeleton_context
 from ..retrieval import retrieve
 
 
@@ -33,3 +33,22 @@ class RetrievalTests(SimpleTestCase):
         self.assertEqual(inventory['figures'][0]['label'], '2')
         with self.assertRaisesMessage(ContextError, 'too small'):
             build_context_packet(self.catalog, 'accuracy', budget=20)
+
+    def test_skeleton_reserves_tail_conclusion_and_figures_with_full_text(self):
+        import json
+        from dataclasses import replace
+        items = [replace(self.items[0], evidence_id=f'intro-{i}', text=f'Introduction paragraph {i}. ' * 12) for i in range(30)]
+        items += [replace(self.items[1], evidence_id='tail-result', text='The results support improved accuracy. ' * 8),
+                  replace(self.items[0], evidence_id='tail-conclusion', pages=(120,), section_path=('Conclusions',), text='Conclusions: the optical method improves performance. ' * 8),
+                  replace(self.items[2], pages=(119,)),
+                  replace(self.items[0], evidence_id='tail-caption', pages=(119,), text='Figure 2. Final experiment comparing the proposed method and baseline. ' * 4)]
+        catalog = EvidenceCatalog(self.catalog.document_parse, items)
+        packet = build_skeleton_context(catalog, budget=10000)
+        self.assertIn('tail-conclusion', packet['allowed_evidence_ids'])
+        self.assertIn('tail-caption', packet['allowed_evidence_ids'])
+        self.assertIn('ev-fig', packet['allowed_evidence_ids'])
+        self.assertLessEqual(len(json.dumps(packet, ensure_ascii=False).encode()), 10000)
+        for item in packet['items']:
+            self.assertEqual(item['text'], catalog.get(item['evidence_id']).text)
+        with self.assertRaises(ContextError):
+            build_skeleton_context(catalog, budget=1000)

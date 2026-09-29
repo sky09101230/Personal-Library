@@ -5,8 +5,8 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_GET, require_POST
 
-from .chat import ChatError
-from .evidence import select_active_parse
+from .paper_context import ContextError
+from .evidence import EvidenceError, select_active_parse
 from .llm import complete
 from .models import PaperAnalysisRun
 from .skeleton import SkeletonError, generate_skeleton
@@ -15,12 +15,17 @@ from .skeleton import SkeletonError, generate_skeleton
 @login_required
 @require_POST
 def skeleton_generate(request, document_id):
-    body = json.loads(request.body or "{}")
+    try:
+        body = json.loads(request.body or "{}")
+        if not isinstance(body, dict) or not isinstance(body.get("force", False), bool):
+            raise ValueError
+    except (ValueError, UnicodeDecodeError):
+        return JsonResponse({"ok": False, "code": "invalid_request", "message": "请求格式无效。"}, status=400)
     try:
         parse = select_active_parse(request.user, document_id, parse_id=body.get("parse_id"))
         run = generate_skeleton(parse, request.user, provider=complete, force=bool(body.get("force")),
                                 request_id=body.get("request_id"))
-    except SkeletonError as exc:
+    except (SkeletonError, EvidenceError, ContextError) as exc:
         return JsonResponse({"ok": False, "code": exc.code, "message": str(exc)}, status=400)
     return JsonResponse({"ok": run.status == PaperAnalysisRun.Status.SUCCEEDED, "run_id": run.pk,
                          "status": run.status, "analysis_id": run.result_id, "payload": run.result.payload if run.result_id else None})

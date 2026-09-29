@@ -6,7 +6,7 @@ from django.views.decorators.http import require_GET
 from apps.box_upload.models import CanonicalDocument, UploadedDocument
 
 from .models import DocumentAnalysis, DocumentParse, DocumentProcessingJob
-from .models import PaperConversation
+from .skeleton import has_supported_claims
 
 
 _STATUS_LABELS = {
@@ -76,6 +76,12 @@ def literature_detail(request, document_id):
             "result_parse": result_parse,
             "overview": overview,
             "skeleton": skeleton,
+            "paper_ai_enabled": literature.index_status == CanonicalDocument.IndexStatus.PUBLISHED,
+            "skeleton_empty": bool(skeleton and not has_supported_claims(skeleton.payload)),
+            "skeleton_sections": [(label, (skeleton.payload.get("sections") or {}).get(key, {})) for key, label in (
+                ("introduction", "研究背景"), ("motivation", "研究动机"), ("gap", "现有工作的不足"),
+                ("proposed_idea", "核心思路"), ("method", "方法与架构"), ("experiments", "实验设置"),
+                ("results", "主要结果"), ("conclusion", "结论"))] if skeleton else [],
             "pages": pages,
             "source_upload": source_upload,
         },

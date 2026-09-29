@@ -4,12 +4,14 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.core.exceptions import ValidationError
+from unittest.mock import Mock
 
 from apps.box_upload.models import CanonicalDocument, UploadedDocument
 
 from ..evidence import Evidence, EvidenceCatalog
 from ..models import DocumentParse, DocumentProcessingJob
-from ..skeleton import generate_skeleton, validate_skeleton_payload
+from ..skeleton import generate_skeleton, validate_skeleton_payload, SkeletonError
 from ..paper_context import build_skeleton_context
 from ..versions import PARSER_VERSION, PROMPT_VERSION
 
@@ -46,3 +48,64 @@ class SkeletonTests(TestCase):
         payload['sections'].pop('gap')
         with self.assertRaises(Exception):
             validate_skeleton_payload(payload)
+
+    @patch('apps.literature_processing.skeleton.build_skeleton_context')
+    def test_empty_or_malformed_analysis_is_not_saved(self, context_builder):
+        context_builder.return_value = {'allowed_evidence_ids': [self.item.evidence_id], 'items': []}
+        empty = self.payload()
+        for section in empty['sections'].values():
+            section.update(status='insufficient_evidence', claims=[])
+        provider = Mock(return_value=SimpleNamespace(content=json.dumps(empty)))
+        with self.assertRaises(SkeletonError) as raised:
+            generate_skeleton(self.parse, self.user, provider=provider, catalog=self.catalog)
+        self.assertEqual(raised.exception.code, 'empty_analysis')
+        self.assertFalse(self.parse.analyses.exists())
+        self.assertEqual(self.parse.paper_analysis_runs.get().status, 'failed')
+        broken = self.payload()
+        broken['sections']['method']['claims'] = ['This is not a claim object']
+        with self.assertRaises(ValidationError):
+            validate_skeleton_payload(broken)
+
+    @patch('apps.literature_processing.skeleton.build_skeleton_context')
+    def test_force_appends_and_invalid_evidence_preserves_previous_result(self, context_builder):
+        context_builder.return_value = {'allowed_evidence_ids': [self.item.evidence_id], 'items': []}
+        provider = Mock(return_value=SimpleNamespace(content=json.dumps(self.payload()), provider='test', returned_model='overview'))
+        first = generate_skeleton(self.parse, self.user, provider=provider, catalog=self.catalog)
+        second = generate_skeleton(self.parse, self.user, provider=provider, catalog=self.catalog, force=True)
+        self.assertNotEqual(first.result_id, second.result_id)
+        invalid = self.payload()
+        invalid['sections']['method']['claims'][0]['evidence_ids'] = ['not-in-packet']
+        provider.return_value.content = json.dumps(invalid)
+        with self.assertRaises(SkeletonError):
+            generate_skeleton(self.parse, self.user, provider=provider, catalog=self.catalog, force=True)
+        self.assertEqual(self.parse.analyses.count(), 2)
+
+    def test_reader_tabs_and_empty_legacy_result_regenerate(self):
+        from ..models import DocumentAnalysis
+        payload = self.payload()
+        for section in payload['sections'].values():
+            section.update(status='insufficient_evidence', claims=[])
+        DocumentAnalysis.objects.create(document_parse=self.parse, analysis_type='paper_skeleton',
+            schema_version='personal.paper-skeleton.v1', provider='test', model='test', prompt_version='paper-skeleton-v1',
+            input_fingerprint='f'*64, payload=payload)
+        self.client.force_login(self.user)
+        response = self.client.get(f'/library/{self.parse.canonical_document.pk}/')
+        self.assertContains(response, 'role="tablist"')
+        self.assertContains(response, 'id="intelligence"')
+        self.assertContains(response, '重新生成总览')
+        self.assertContains(response, '旧总览没有生成有效的带证据结论')
+        self.assertNotContains(response, '<h4>introduction</h4>')
+
+    @patch('apps.literature_processing.skeleton.load_config')
+    @patch('apps.literature_processing.skeleton.complete')
+    @patch('apps.literature_processing.skeleton.build_skeleton_context')
+    def test_default_provider_uses_skeleton_timeout_without_changing_chat(self, builder, complete, config):
+        from ..llm import LLMConfig
+        config.return_value = LLMConfig('http://localhost:53347/v1', 'dummy', 'chat', 'overview')
+        builder.return_value = {'allowed_evidence_ids': [self.item.evidence_id], 'items': []}
+        complete.return_value = SimpleNamespace(content=json.dumps(self.payload()), provider='test', returned_model='overview')
+        run = generate_skeleton(self.parse, self.user, catalog=self.catalog)
+        self.assertEqual(run.status, 'succeeded')
+        self.assertEqual(complete.call_args.kwargs['config'].timeout, 120)
+        self.assertEqual(complete.call_args.kwargs['config'].max_retries, 0)
+        self.assertEqual(config.return_value.timeout, 30)

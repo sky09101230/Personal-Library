@@ -85,36 +85,77 @@ def build_skeleton_inventory(catalog):
 
 
 def build_skeleton_context(catalog, *, budget=DEFAULT_BUDGET):
-    """Select structural buckets before filling remaining budget."""
-    inventory = build_skeleton_inventory(catalog)
+    """Round-robin complete source items; reserve every present section and figure."""
+    import re
+    groups = {}
+    seen = set()
+    figures = [item for item in catalog.items if item.kind == "figure"]
+    # Structured blocks prevent duplicate chunk+block copies of the same text.
+    structured = any(item.block_ids and item.text.strip() for item in catalog.items)
+    for item in catalog.items:
+        if item.kind == "figure" or not item.text.strip():
+            continue
+        if structured and not item.block_ids:
+            continue
+        section = " ".join(item.section_path[-1:]).lower()
+        if any(word in section for word in ("references", "acknowledg", "competing", "rights", "permission", "related articles", "take down", "citing this", "author contributions")):
+            continue
+        text = item.text.strip()
+        normalized = " ".join(text.split())
+        if normalized in seen or len(text) < 60:
+            continue
+        seen.add(normalized)
+        bucket = _bucket(item.section_path, text)
+        if re.match(r"^(?:fig(?:ure)?|图)\.?\s*\d+", text, re.I):
+            # Each caption is a reserved group, including the final figure.
+            bucket = "caption:" + item.evidence_id
+        groups.setdefault(bucket, []).append(item)
+    ordered = [key for key in ("abstract", "introduction", "method", "results", "conclusion", "other") if key in groups]
+    ordered += [key for key in groups if key.startswith("caption:")]
     selected = []
     selected_ids = set()
-    preferred = ("introduction", "method", "results", "conclusion", "other")
-    per_bucket = max(1, int(budget / max(1, len(preferred))))
-    used = 0
-    for bucket in preferred:
-        for evidence_id in inventory["sections"].get(bucket, ()):
-            item = catalog.get(evidence_id)
-            size = len(item.text) + 120
-            if used + size > budget and selected:
-                break
-            selected.append(item)
-            selected_ids.add(item.evidence_id)
-            used += size
-            if used >= budget:
-                break
-        if used >= budget:
-            break
-    omitted = [figure for figure in inventory["figures"] if figure["evidence_id"] not in selected_ids]
-    return {
-        "schema_version": CONTEXT_VERSION,
-        "purpose": "skeleton",
-        "items": [{"evidence_id": item.evidence_id, "text": item.text, "pages": list(item.pages), "kind": item.kind} for item in selected],
-        "allowed_evidence_ids": [item.evidence_id for item in selected],
-        "coverage": {"inventory": inventory, "selected": len(selected), "omitted_figures": omitted,
-                     "partial": bool(omitted)},
-        "budget": {"max_chars": budget, "used": used, "estimated": True},
-    }
+    def pack(item):
+        return {"evidence_id": item.evidence_id, "kind": item.kind, "text": item.text,
+                "pages": list(item.pages), "section_path": list(item.section_path)}
+    payload = {"schema_version": CONTEXT_VERSION, "context_version": "skeleton-balanced-v2",
+               "purpose": "skeleton", "parse_id": catalog.document_parse.pk,
+               "artifact_sha256": catalog.document_parse.artifact_sha256,
+               "items": [], "allowed_evidence_ids": [], "coverage": {}}
+    def fits(items):
+        candidate = {**payload, "items": [pack(item) for item in items],
+                     "allowed_evidence_ids": [item.evidence_id for item in items]}
+        # Reserve metadata room; JSON UTF-8 bytes conservatively bound text tokens.
+        return len(json.dumps(candidate, ensure_ascii=False).encode("utf-8")) + 2048 <= budget
+    for key in ordered:
+        item = groups[key][0]
+        if not fits(selected + [item]):
+            raise ContextError("context_budget_exceeded", "上下文预算不足以覆盖章节和图注，请提高 PAPER_SKELETON_CONTEXT_BYTES。")
+        selected.append(item); selected_ids.add(item.evidence_id)
+    for figure in figures:
+        if fits(selected + [figure]):
+            selected.append(figure); selected_ids.add(figure.evidence_id)
+    depth = 1
+    while any(len(groups[key]) > depth for key in ordered):
+        for key in ordered:
+            if len(groups[key]) > depth:
+                item = groups[key][depth]
+                if fits(selected + [item]):
+                    selected.append(item); selected_ids.add(item.evidence_id)
+        depth += 1
+    if not any(item.text.strip() for item in selected):
+        raise ContextError("no_text", "没有可用于总览的论文正文。")
+    eligible = [item for group in groups.values() for item in group] + figures
+    payload["items"] = [pack(item) for item in selected]
+    payload["allowed_evidence_ids"] = [item.evidence_id for item in selected]
+    payload["coverage"] = {"partial": len(selected) < len(eligible),
+                           "selected": len(selected), "total": len(eligible),
+                           "sections": [key for key in ordered if not key.startswith("caption:")],
+                           "figures_selected": sum(item.kind == "figure" for item in selected),
+                           "figures_total": len(figures)}
+    payload["budget"] = {"max_bytes": budget, "estimated": True}
+    if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > budget:
+        raise ContextError("context_budget_exceeded", "上下文超过预算。")
+    return payload
 
 
 def _coverage(catalog, items, purpose):
@@ -123,8 +164,8 @@ def _coverage(catalog, items, purpose):
 
 
 def _bucket(section_path, text):
-    value = " ".join(section_path).lower()
-    if any(word in value for word in ("conclusion", "discussion")):
+    value = " ".join(section_path[-1:]).lower()
+    if any(word in value for word in ("conclusion",)):
         return "conclusion"
     if any(word in value for word in ("method", "architecture", "approach")):
         return "method"
@@ -132,4 +173,6 @@ def _bucket(section_path, text):
         return "results"
     if "introduction" in value or "motivation" in value:
         return "introduction"
+    if "abstract" in value or text.lstrip().lower().startswith("abstract"):
+        return "abstract"
     return "other"

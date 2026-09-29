@@ -10,6 +10,12 @@
     {% if source_upload %}<a class="row-action primary-action" href="{% url 'view-document' source_upload.pk %}" target="_blank" rel="noopener">在线打开 PDF</a><a class="row-action" href="{% url 'download-document' source_upload.pk %}">下载</a>{% endif %}
   </div>
 </header>
+<nav class="reader-tabs" aria-label="文献阅读分区" role="tablist">
+  <a id="tab-intelligence" href="#intelligence" role="tab" aria-controls="intelligence" aria-selected="true">Paper Intelligence · 智能阅读</a>
+  <a id="tab-overview" href="#paper-overview" role="tab" aria-controls="paper-overview" aria-selected="false">文献信息 / AI Overview</a>
+  <a id="tab-parsed" href="#parsed-content" role="tab" aria-controls="parsed-content" aria-selected="false">Parsed Content · 原文片段</a>
+</nav>
+<div id="paper-overview" class="reader-panel" role="tabpanel" aria-labelledby="tab-overview">
 
 <dl class="literature-facts">
   <div><dt>作者</dt><dd>{% for author in literature.authors %}{{ author.name|default:"姓名未知" }}{% if not forloop.last %}、{% endif %}{% empty %}—{% endfor %}</dd></div>
@@ -105,7 +111,8 @@
   </aside>
 </div>
 
-<section class="detail-section paper-intelligence-reader" aria-labelledby="paper-intelligence-title">
+</div>
+<section id="intelligence" role="tabpanel" aria-labelledby="tab-intelligence" class="reader-panel detail-section paper-intelligence-reader">
   <div class="overview-heading">
     <div><p class="eyebrow">Paper Intelligence</p><h2 id="paper-intelligence-title">文章智能阅读</h2></div>
     {% if result_parse %}<span class="subtle">Parse {{ result_parse.pk }} · {{ result_parse.schema_version }}</span>{% endif %}
@@ -113,17 +120,22 @@
   <div class="reader-grid">
     <article aria-labelledby="skeleton-title">
       <h3 id="skeleton-title">Paper Skeleton Overview</h3>
-      {% if skeleton %}
+      {% if skeleton and not skeleton_empty %}
         <p class="analysis-provenance">{{ skeleton.provider }} · {{ skeleton.model }} · {{ skeleton.prompt_version }}</p>
         <div class="skeleton-sections">
-          {% for name, section in skeleton.payload.sections.items %}
+          {% for name, section in skeleton_sections %}
           <section class="skeleton-section"><h4>{{ name }}</h4>{% if section.claims %}<ul>{% for claim in section.claims %}<li>{{ claim.text }} <span class="evidence-links">{% for evidence_id in claim.evidence_ids %}<a href="{% url 'paper-evidence-detail' literature.pk result_parse.pk evidence_id %}" target="_blank" rel="noopener">Evidence</a>{% endfor %}</span></li>{% endfor %}</ul>{% else %}<p class="subtle">证据不足。</p>{% endif %}</section>
           {% endfor %}
         </div>
+        {% if skeleton.payload.coverage.partial %}<p class="subtle">此总览基于部分原文；请结合证据核对全文。</p>{% endif %}
+        {% for figure in skeleton.payload.figures %}<section class="skeleton-section"><h4>图示解读 {{ forloop.counter }}</h4>{% for claim in figure.claims %}<p>{{ claim.text }}</p><div class="evidence-links">{% for evidence_id in claim.evidence_ids %}<a href="{% url 'paper-evidence-detail' literature.pk result_parse.pk evidence_id %}" target="_blank" rel="noopener">查看证据</a>{% endfor %}</div>{% empty %}<p class="subtle">当前来源未能支持该图的解读。</p>{% endfor %}</section>{% endfor %}
+      {% elif skeleton_empty %}
+        <p class="reader-notice">旧总览没有生成有效的带证据结论，不能据此判断论文本身证据不足。请重新生成总览。</p>
       {% else %}
         <p class="subtle">暂无结构化总览。生成会按论文结构覆盖 Introduction、Method、Results、Figures 和 Conclusion。</p>
-        {% if result_parse %}<button type="button" class="row-action" id="generate-skeleton" data-url="{% url 'paper-skeleton-generate' literature.pk %}">生成 Paper Skeleton</button>{% endif %}
       {% endif %}
+      {% if result_parse and paper_ai_enabled %}<button type="button" class="row-action" id="generate-skeleton" data-force="{% if skeleton %}true{% else %}false{% endif %}" data-parse="{{ result_parse.pk }}" data-url="{% url 'paper-skeleton-generate' literature.pk %}">{% if skeleton %}重新生成总览{% else %}生成 Paper Skeleton{% endif %}</button>{% endif %}
+      <p id="skeleton-generation-status" role="status" aria-live="polite"></p>
     </article>
     <article aria-labelledby="chat-title">
       <h3 id="chat-title">Paper Chat</h3>
@@ -135,7 +147,7 @@
   </div>
 </section>
 
-<section class="detail-section parsed-text-section" aria-labelledby="parsed-text-title">
+<section id="parsed-content" role="tabpanel" class="reader-panel detail-section parsed-text-section" aria-labelledby="tab-parsed">
   <p class="eyebrow">Page Text</p>
   <h2 id="parsed-text-title">Parsed Text</h2>
   {% for page in pages %}
@@ -147,6 +159,43 @@
     </details>
   {% empty %}<p class="subtle">暂无解析文本。</p>{% endfor %}
 </section>
+<style>
+.reader-tabs { display:flex; flex-wrap:wrap; gap:8px; margin:16px 0 24px; border-bottom:1px solid #cbded5; padding-bottom:12px; }
+.reader-tabs a { padding:10px 16px; border-radius:6px; text-decoration:none; border:1px solid #bcd2c7; }
+.reader-tabs a[aria-selected="true"] { background:#195440; color:white; }
+.reader-panel[hidden] { display:none !important; }
+.reader-grid { display:grid; grid-template-columns:minmax(0, 3fr) minmax(280px, 2fr); gap:32px; align-items:start; }
+.reader-grid article { min-width:0; }
+#paper-chat-form { display:grid; gap:12px; }
+#paper-chat-question { width:100%; box-sizing:border-box; min-height:120px; padding:12px; border:1px solid #bcd2c7; border-radius:6px; font:inherit; }
+#paper-chat-form button { justify-self:start; }
+.skeleton-section { padding:8px 0; border-bottom:1px solid #dde7e2; }
+.reader-notice { padding:16px; background:#fff5db; border-radius:6px; }
+@media(max-width:800px) { .reader-grid { grid-template-columns:1fr; } }
+</style>
+<script>
+(() => {
+  const tabs = Array.from(document.querySelectorAll('.reader-tabs [role="tab"]'));
+  const panels = Array.from(document.querySelectorAll('.reader-panel'));
+  function showFromHash() {
+    const hash = window.location.hash.slice(1);
+    const target = hash.startsWith('chunk-') ? 'parsed-content' : (panels.some(p => p.id === hash) ? hash : 'intelligence');
+    panels.forEach(panel => { panel.hidden = panel.id !== target; });
+    tabs.forEach(tab => { const active = tab.getAttribute('aria-controls') === target; tab.setAttribute('aria-selected', String(active)); tab.tabIndex = active ? 0 : -1; });
+    if (hash.startsWith('chunk-')) { const chunk = document.getElementById(hash); if (chunk) { chunk.closest('details').open = true; chunk.scrollIntoView(); } }
+  }
+  tabs.forEach((tab, index) => tab.addEventListener('keydown', event => {
+    let next;
+    if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+    if (event.key === 'ArrowLeft') next = (index + tabs.length - 1) % tabs.length;
+    if (event.key === 'Home') next = 0;
+    if (event.key === 'End') next = tabs.length - 1;
+    if (next !== undefined) { event.preventDefault(); tabs[next].focus(); tabs[next].click(); }
+  }));
+  window.addEventListener('hashchange', showFromHash);
+  showFromHash();
+})();
+</script>
 {% if overview.payload.chinese_translation %}
 <script>
 (() => {
@@ -212,8 +261,17 @@
   const skeleton = document.getElementById("generate-skeleton");
   if (skeleton) skeleton.addEventListener("click", async () => {
     skeleton.disabled = true;
-    const response = await fetch(skeleton.dataset.url, {method: "POST", credentials: "same-origin", headers: {"X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "", "Content-Type": "application/json"}, body: "{}"});
-    if (response.ok) window.location.reload(); else { skeleton.disabled = false; skeleton.textContent = "生成失败，请稍后重试"; }
+    const status = document.getElementById("skeleton-generation-status");
+    status.textContent = "正在按全文结构生成总览，请稍候…";
+    try {
+      const response = await fetch(skeleton.dataset.url, {method: "POST", credentials: "same-origin", headers: {"X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "", "Content-Type": "application/json"}, body: JSON.stringify({force: skeleton.dataset.force === "true", parse_id: Number(skeleton.dataset.parse)})});
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.message || "生成失败，请稍后重试。");
+      window.location.hash = "intelligence";
+      window.location.reload();
+    } catch (error) {
+      status.textContent = error.message || "网络连接失败，请重试。";
+    } finally { skeleton.disabled = false; }
   });
   const form = document.getElementById("paper-chat-form");
   if (!form) return;
