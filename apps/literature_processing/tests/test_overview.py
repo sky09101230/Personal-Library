@@ -174,7 +174,8 @@ class OverviewValidationTests(OverviewTestDataMixin, TestCase):
 class OverviewProviderTests(OverviewTestDataMixin, TestCase):
     @patch.dict(
         "os.environ",
-        {"DEEPSEEK_API_KEY": "test-key", "DEEPSEEK_OVERVIEW_MODEL": "overview-model"},
+        {"DEEPSEEK_API_KEY": "test-key", "DEEPSEEK_OVERVIEW_MODEL": "overview-model",
+         "PAPER_LLM_BASE_URL": "", "PAPER_LLM_API_KEY": "", "PAPER_CHAT_MODEL": "", "PAPER_OVERVIEW_MODEL": ""},
         clear=False,
     )
     def test_provider_uses_structured_json_and_persists_provenance(self):

@@ -4,6 +4,7 @@ import hashlib
 import json
 import uuid
 import os
+import logging
 from dataclasses import replace
 from datetime import timedelta
 
@@ -15,6 +16,9 @@ from .evidence import validate_claims
 from .models import DocumentAnalysis, PaperAnalysisRun
 from .paper_context import build_skeleton_context
 from .llm import complete, load_config
+
+
+logger = logging.getLogger(__name__)
 
 
 SKELETON_SCHEMA_VERSION = "personal.paper-skeleton.v1"
@@ -33,19 +37,19 @@ def generate_skeleton(document_parse, user, *, provider=None, force=False, reque
     profile = {}
     if provider is None or provider is complete:
         try:
-            timeout = int(os.environ.get("PAPER_SKELETON_TIMEOUT", "120"))
-            if not 1 <= timeout <= 120:
+            timeout = int(os.environ.get("PAPER_SKELETON_TIMEOUT", "180"))
+            if not 1 <= timeout <= 300:
                 raise ValueError
             config = replace(load_config(), timeout=timeout, max_retries=0)
         except ValueError:
-            raise SkeletonError("invalid_configuration", "PAPER_SKELETON_TIMEOUT 必须为 1–120 秒。") from None
+            raise SkeletonError("invalid_configuration", "PAPER_SKELETON_TIMEOUT 必须为 1–300 秒。") from None
         except Exception:
             raise SkeletonError("invalid_configuration", "请配置 PAPER_CHAT_MODEL、PAPER_OVERVIEW_MODEL 和模型接口。") from None
         profile = {"base_url": config.base_url, "model": config.overview_model, "profile": config.profile}
         def provider(role, messages, **kwargs):
             return complete(role, messages, config=config, **kwargs)
     catalog = catalog or build_catalog(document_parse)
-    context = build_skeleton_context(catalog, budget=int(os.environ.get("PAPER_SKELETON_CONTEXT_BYTES", "48000")))
+    context = build_skeleton_context(catalog, budget=int(os.environ.get("PAPER_SKELETON_CONTEXT_BYTES", "24000")))
     generation_key = hashlib.sha256(json.dumps({"parse": document_parse.pk, "artifact": document_parse.artifact_sha256,
                                                 "context": context, "profile": profile, "prompt": SKELETON_PROMPT_VERSION}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     request_id = request_id or uuid.uuid4().hex
@@ -68,7 +72,7 @@ def generate_skeleton(document_parse, user, *, provider=None, force=False, reque
             raise SkeletonError("provider_unavailable", "Paper LLM provider is unavailable.")
         messages = [{"role": "system", "content": _prompt()},
                     {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
-        result = provider("overview", messages, output_mode="json", max_tokens=8192)
+        result = provider("overview", messages, output_mode="json", max_tokens=4096)
         payload = json.loads(result.content if hasattr(result, "content") else result)
         # Coverage is measured by the server, never supplied as a model assertion.
         if isinstance(payload, dict):
@@ -107,6 +111,7 @@ def generate_skeleton(document_parse, user, *, provider=None, force=False, reque
         run.completed_at = timezone.now()
         run.lease_expires_at = None
         run.save(update_fields=("status", "error_code", "error_message", "completed_at", "lease_expires_at"))
+        logger.warning("Paper Skeleton run %s failed: %s (%s)", run.pk, run.error_code, type(exc).__name__)
         if isinstance(exc, SkeletonError):
             raise
         raise SkeletonError(run.error_code, run.error_message) from None

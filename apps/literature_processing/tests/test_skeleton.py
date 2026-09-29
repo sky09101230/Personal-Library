@@ -106,6 +106,6 @@ class SkeletonTests(TestCase):
         complete.return_value = SimpleNamespace(content=json.dumps(self.payload()), provider='test', returned_model='overview')
         run = generate_skeleton(self.parse, self.user, catalog=self.catalog)
         self.assertEqual(run.status, 'succeeded')
-        self.assertEqual(complete.call_args.kwargs['config'].timeout, 120)
+        self.assertEqual(complete.call_args.kwargs['config'].timeout, 180)
         self.assertEqual(complete.call_args.kwargs['config'].max_retries, 0)
         self.assertEqual(config.return_value.timeout, 30)
