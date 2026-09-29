@@ -19,9 +19,10 @@ function Get-DotEnvValue([string]$name) {
 $dataRoot = Get-DotEnvValue "LOCAL_STORAGE_ROOT"
 if (-not $dataRoot) { $dataRoot = "E:\Personal-Library\data" }
 if (-not [IO.Path]::IsPathRooted($dataRoot)) { $dataRoot = Join-Path $PSScriptRoot $dataRoot }
-$workerPidPath = Join-Path $dataRoot "worker.pid"
-$workerStdout = Join-Path $dataRoot "worker.stdout.log"
-$workerStderr = Join-Path $dataRoot "worker.stderr.log"
+$workerStateRoot = $dataRoot
+$workerPidPath = Join-Path $workerStateRoot "worker.pid"
+$workerStdout = Join-Path $workerStateRoot "worker.stdout.log"
+$workerStderr = Join-Path $workerStateRoot "worker.stderr.log"
 
 if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     throw "Project Python was not found: $python. Run python -m venv .venv and install requirements.txt first."
@@ -30,15 +31,30 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
 Push-Location $PSScriptRoot
 try {
     New-Item -ItemType Directory -Force -Path $dataRoot | Out-Null
+    try {
+        $probePath = Join-Path $workerStateRoot ".worker-write-test"
+        Set-Content -LiteralPath $probePath -Value "ok" -NoNewline -Force
+        Remove-Item -LiteralPath $probePath -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $workerPidPath -PathType Leaf) {
+            Add-Content -LiteralPath $workerPidPath -Value "" -ErrorAction Stop
+        }
+    } catch {
+        $workerStateRoot = Join-Path $PSScriptRoot ".runtime"
+        New-Item -ItemType Directory -Force -Path $workerStateRoot | Out-Null
+        $workerPidPath = Join-Path $workerStateRoot "worker.pid"
+        $workerStdout = Join-Path $workerStateRoot "worker.stdout.log"
+        $workerStderr = Join-Path $workerStateRoot "worker.stderr.log"
+        Write-Warning "Worker state directory is not writable; using $workerStateRoot."
+    }
     & $python manage.py check
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
 
-    function Test-WorkerPid([int]$pid) {
-        if ($pid -le 0) { return $false }
+    function Test-WorkerProcessId([int]$processId) {
+        if ($processId -le 0) { return $false }
         try {
-            $process = Get-Process -Id $pid -ErrorAction Stop
+            $process = Get-Process -Id $processId -ErrorAction Stop
             return $process.ProcessName -in @("python", "python3")
         } catch {
             return $false
@@ -49,7 +65,7 @@ try {
     if (Test-Path -LiteralPath $workerPidPath -PathType Leaf) {
         $savedPid = 0
         if ([int]::TryParse((Get-Content -LiteralPath $workerPidPath -Raw).Trim(), [ref]$savedPid)) {
-            $workerRunning = Test-WorkerPid $savedPid
+            $workerRunning = Test-WorkerProcessId $savedPid
         }
         if (-not $workerRunning) { Remove-Item -LiteralPath $workerPidPath -Force -ErrorAction SilentlyContinue }
     }
