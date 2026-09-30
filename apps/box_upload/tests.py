@@ -454,9 +454,9 @@ class UploadPageTests(TestCase):
 
         for heading in ("标题", "作者", "期刊与年份", "状态", "文献操作", "PDF 附件"):
             self.assertContains(response, heading)
-        for value in ("Complete metadata paper", "Author Four", "10.1000/complete", "Complete Journal", "2026", "在线打开", "下载"):
+        for value in ("Complete metadata paper", "Author Four", "10.1000/complete", "https://doi.org/10.1000/complete", "Complete Journal", "2026", "在线打开", "下载", "ai-tag", "文献详情"):
             self.assertContains(response, value)
-        for removed in ("Complete abstract text.", "user-tag", "source-tag", "ai-tag", "complete.pdf", "/complete.pdf", "123456", "查看完整证据", "外部引用"):
+        for removed in ("Complete abstract text.", "user-tag", "source-tag", "complete.pdf", "/complete.pdf", "123456", "查看完整证据", "外部引用"):
             self.assertNotContains(response, removed)
         self.assertContains(response, "元数据需处理")
         self.assertContains(response, "不完整、待复核或冲突")
