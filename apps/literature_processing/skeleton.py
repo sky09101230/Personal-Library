@@ -15,7 +15,7 @@ from django.utils import timezone
 from .evidence import validate_claims
 from .models import DocumentAnalysis, PaperAnalysisRun
 from .paper_context import build_skeleton_context
-from .llm import complete, load_config
+from .llm import LLMError, complete, load_config
 
 
 logger = logging.getLogger(__name__)
@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 SKELETON_SCHEMA_VERSION = "personal.paper-skeleton.v1"
 SKELETON_PROMPT_VERSION = "paper-skeleton-v2"
 SECTION_KEYS = ("introduction", "motivation", "gap", "proposed_idea", "method", "experiments", "results", "conclusion")
+SKELETON_FALLBACK_CONTEXT_BYTES = 18000
 
 
 class SkeletonError(RuntimeError):
@@ -36,6 +37,7 @@ def generate_skeleton(document_parse, user, *, provider=None, force=False, reque
     from .evidence import build_catalog
     profile = {}
     max_tokens = 2048
+    using_default_provider = provider is None or provider is complete
     if provider is None or provider is complete:
         try:
             timeout = int(os.environ.get("PAPER_SKELETON_TIMEOUT", "180"))
@@ -54,7 +56,8 @@ def generate_skeleton(document_parse, user, *, provider=None, force=False, reque
             raise SkeletonError("invalid_configuration", "请配置 PAPER_CHAT_MODEL、PAPER_OVERVIEW_MODEL 和模型接口。") from None
         profile = {"base_url": config.base_url, "model": config.overview_model, "profile": config.profile}
         def provider(role, messages, **kwargs):
-            return complete(role, messages, config=config, **kwargs)
+            request_config = kwargs.pop("config", config)
+            return complete(role, messages, config=request_config, **kwargs)
     catalog = catalog or build_catalog(document_parse)
     context = build_skeleton_context(catalog, budget=int(os.environ.get("PAPER_SKELETON_CONTEXT_BYTES", "24000")))
     generation_key = hashlib.sha256(json.dumps({"parse": document_parse.pk, "artifact": document_parse.artifact_sha256,
@@ -79,10 +82,40 @@ def generate_skeleton(document_parse, user, *, provider=None, force=False, reque
             raise SkeletonError("provider_unavailable", "Paper LLM provider is unavailable.")
         messages = [{"role": "system", "content": _prompt()},
                     {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
-        # Skeletons have a fixed, compact schema.  Keeping the completion budget
+        # Skeletons have a fixed, compact schema. Keeping the completion budget
         # bounded prevents the local Cockpit proxy from timing out while the model
         # spends tokens on unconstrained reasoning or repeated claims.
-        result = provider("overview", messages, output_mode="json", max_tokens=max_tokens)
+        try:
+            result = provider("overview", messages, output_mode="json", max_tokens=max_tokens)
+        except LLMError as exc:
+            # Cockpit may spend the whole request timeout on a large paper context
+            # with medium reasoning. Retry once with a bounded packet that still
+            # reserves all section groups and figures, and use low reasoning for
+            # this recovery request. This path is limited to the built-in provider;
+            # custom providers retain their own retry semantics.
+            if not using_default_provider or exc.code != "transport_error":
+                raise
+            fallback_budget = min(
+                int(os.environ.get("PAPER_SKELETON_FALLBACK_CONTEXT_BYTES", SKELETON_FALLBACK_CONTEXT_BYTES)),
+                SKELETON_FALLBACK_CONTEXT_BYTES,
+            )
+            if fallback_budget >= int(os.environ.get("PAPER_SKELETON_CONTEXT_BYTES", "24000")):
+                raise
+            fallback_context = build_skeleton_context(catalog, budget=fallback_budget)
+            fallback_messages = [{"role": "system", "content": _prompt()},
+                                 {"role": "user", "content": json.dumps(fallback_context, ensure_ascii=False)}]
+            logger.warning(
+                "Paper Skeleton run %s transport failure; retrying compact context (%s -> %s bytes)",
+                run.pk, len(json.dumps(context, ensure_ascii=False).encode("utf-8")),
+                len(json.dumps(fallback_context, ensure_ascii=False).encode("utf-8")),
+            )
+            context = fallback_context
+            run.context_manifest = context
+            run.save(update_fields=("context_manifest",))
+            result = provider(
+                "overview", fallback_messages, output_mode="json", max_tokens=max_tokens,
+                config=replace(config, reasoning_effort="low"),
+            )
         payload = json.loads(result.content if hasattr(result, "content") else result)
         # Coverage is measured by the server, never supplied as a model assertion.
         if isinstance(payload, dict):
