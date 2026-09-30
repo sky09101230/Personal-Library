@@ -353,7 +353,8 @@ button:disabled { cursor:wait; opacity:.65; }
   const pollSkeleton = async (runId, startedAt) => {
     const url = skeleton.dataset.statusUrl.replace(/\/0\/?$/, `/${runId}/`);
     try {
-      const response = await fetch(url, {credentials: "same-origin", cache: "no-store"});
+      const response = await fetchWithTimeout(url, {credentials: "same-origin", cache: "no-store"}, 15000);
+      if (!response.ok) throw new Error("无法读取总览生成状态，请重新生成。");
       const result = await response.json();
       if (result.status === "succeeded") {
         finishSkeletonProgress("总览生成完成。");
