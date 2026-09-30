@@ -41,9 +41,9 @@ def build_context_packet(catalog, query="", *, history=(), budget=DEFAULT_BUDGET
     used = 0
     for hit in hits:
         evidence = hit.evidence
-        excerpt = evidence.text[: max(0, budget - used)]
+        excerpt = evidence.text
         if not excerpt:
-            break
+            continue
         item = {
             "evidence_id": evidence.evidence_id,
             "kind": evidence.kind,
@@ -53,8 +53,8 @@ def build_context_packet(catalog, query="", *, history=(), budget=DEFAULT_BUDGET
             "score": {"total": hit.score, "lexical": hit.lexical_score, "structural": hit.structural_score},
         }
         serialized_size = len(json.dumps(item, ensure_ascii=False))
-        if used + serialized_size > budget and items:
-            break
+        if used + serialized_size > budget:
+            continue
         used += serialized_size
         items.append(item)
     if not items and query:

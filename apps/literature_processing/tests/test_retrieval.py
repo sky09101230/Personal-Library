@@ -4,7 +4,8 @@ from django.test import SimpleTestCase
 
 from ..evidence import Evidence, EvidenceCatalog
 from ..paper_context import ContextError, build_context_packet, build_skeleton_inventory, build_skeleton_context
-from ..retrieval import retrieve
+from ..retrieval import retrieve, rewrite_query
+from types import SimpleNamespace
 
 
 class RetrievalTests(SimpleTestCase):
@@ -52,3 +53,36 @@ class RetrievalTests(SimpleTestCase):
             self.assertEqual(item['text'], catalog.get(item['evidence_id']).text)
         with self.assertRaises(ContextError):
             build_skeleton_context(catalog, budget=1000)
+
+    def test_query_rewrite_parses_actual_provider_result_and_retrieves_both_facets(self):
+        from dataclasses import replace
+        import json
+        question = '本工作工作在什么波段？网络结构是什么样的'
+        wavelength = replace(self.items[0], evidence_id='band', text='Continuous-wave illumination at 0.4 THz, wavelength 0.75 mm.')
+        structure = replace(self.items[1], evidence_id='architecture', text='The architecture consists of five diffractive layers and ten detector regions.')
+        catalog = EvidenceCatalog(self.catalog.document_parse, [wavelength, structure])
+        provider = Mock(return_value=SimpleNamespace(content=json.dumps({'queries': ['operating wavelength frequency', 'network architecture layers']})))
+        packet = build_context_packet(catalog, question, provider=provider)
+        self.assertIn('band', packet.allowed_evidence_ids)
+        self.assertIn('architecture', packet.allowed_evidence_ids)
+        self.assertNotIn('rewrite_unavailable', packet.payload['warnings'])
+        self.assertIn('question', provider.call_args.args[1][1]['content'])
+
+    def test_failed_rewrite_keeps_bilingual_search_aliases_not_external_facts(self):
+        question = '工作波段和网络结构是什么？'
+        queries, warning = rewrite_query(question, provider=Mock(side_effect=TimeoutError))
+        self.assertEqual(warning, 'rewrite_unavailable')
+        self.assertTrue(any('wavelength' in query for query in queries))
+        self.assertTrue(any('layers' in query for query in queries))
+        self.assertFalse(any('0.4' in query for query in queries))
+        queries, warning = rewrite_query('你好', provider=Mock(return_value=SimpleNamespace(content='{}')))
+        self.assertEqual(queries, ())
+
+    def test_long_source_does_not_block_smaller_hits_or_license_unsent_text(self):
+        from dataclasses import replace
+        large = replace(self.items[0], evidence_id='large', text='wavelength ' * 2000)
+        small = replace(self.items[1], evidence_id='small', text='The wavelength is measured in the experiment.')
+        catalog = EvidenceCatalog(self.catalog.document_parse, [large, small])
+        packet = build_context_packet(catalog, 'wavelength', budget=1000, rewritten_queries=())
+        self.assertEqual(packet.allowed_evidence_ids, {'small'})
+        self.assertEqual(packet.payload['items'][0]['text'], small.text)

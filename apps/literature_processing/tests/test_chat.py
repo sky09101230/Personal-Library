@@ -62,7 +62,7 @@ class PaperChatTests(TestCase):
         message = ask_conversation(conversation, self.user, '你好', request_id='no-match', provider=self.provider)
         self.assertEqual(message.status, PaperChatMessage.Status.SUCCEEDED)
         self.assertEqual(message.structured_payload['status'], 'insufficient_evidence')
-        self.assertIn('没有找到', message.content)
+        self.assertIn('本次检索没有找到', message.content)
 
     def test_expired_pending_turn_is_released(self):
         conversation = create_conversation(self.user, self.document.pk, parse_id=self.parse.pk)
