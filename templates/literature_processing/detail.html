@@ -386,6 +386,7 @@ button:disabled { cursor:wait; opacity:.65; }
   const submitSpinner = form.querySelector(".button-spinner");
   const storageKey = shell?.dataset.storageKey || "paper-chat:unknown";
   let conversationId = null;
+  let chatElapsedTimer = null;
   try { conversationId = window.localStorage.getItem(storageKey) || null; } catch (_) { conversationId = null; }
   const setStatus = (text = "") => { if (chatStatus) chatStatus.textContent = text; };
   const scrollMessages = () => { messages.scrollTop = messages.scrollHeight; };
@@ -468,8 +469,13 @@ button:disabled { cursor:wait; opacity:.65; }
       const response = await fetch(shell.dataset.listUrl, {credentials: "same-origin", cache: "no-store"});
       if (!response.ok) throw new Error("history_list_unavailable");
       const payload = await response.json();
-      renderConversationList(payload.conversations || []);
-      return payload.conversations || [];
+      const items = payload.conversations || [];
+      if (!conversationId && items.length) {
+        conversationId = items[0].conversation_id;
+        try { window.localStorage.setItem(storageKey, conversationId); } catch (_) {}
+      }
+      renderConversationList(items);
+      return items;
     } catch (_) {
       historyList.innerHTML = '<span class="subtle">历史对话暂时不可用</span>';
       return [];
@@ -508,6 +514,7 @@ button:disabled { cursor:wait; opacity:.65; }
     submitButton.disabled = busy;
     submitLabel.hidden = busy;
     submitSpinner.hidden = !busy;
+    if (!busy && chatElapsedTimer) { window.clearInterval(chatElapsedTimer); chatElapsedTimer = null; }
   };
   questionInput.addEventListener("keydown", event => {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); form.requestSubmit(); }
@@ -521,14 +528,15 @@ button:disabled { cursor:wait; opacity:.65; }
     setStatus("已开始新对话。");
     questionInput.focus();
   });
-  loadConversationList();
-  const historyReady = loadHistory();
+  const historyReady = loadConversationList().then(() => loadHistory());
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const question = questionInput.value.trim();
     if (!question) return;
     setChatBusy(true);
-    setStatus("正在检索当前论文 Evidence…");
+    const chatStartedAt = Date.now();
+    setStatus("正在检索当前论文 Evidence…（已用时 0 秒）");
+    chatElapsedTimer = window.setInterval(() => setStatus(`正在检索当前论文 Evidence…（已用时 ${Math.round((Date.now() - chatStartedAt) / 1000)} 秒）`), 2000);
     clearEmpty();
     renderMessage({role: "user", content: question, created_at: new Date().toISOString()});
     const pending = renderMessage({role: "assistant", content: "", created_at: new Date().toISOString(), status: "pending"}, {pending: true});
@@ -539,6 +547,11 @@ button:disabled { cursor:wait; opacity:.65; }
       const response = await fetch(askUrl, {method: "POST", credentials: "same-origin", headers: {"X-CSRFToken": csrfToken, "Content-Type": "application/json"}, body: JSON.stringify({question, request_id: randomId()})});
       const payload = await response.json().catch(() => ({}));
       pending.remove();
+      if (response.status === 409) {
+        await loadHistory();
+        setStatus(payload.message || "上一轮回答仍在生成，请稍候；已刷新当前对话状态。");
+        return;
+      }
       if (!response.ok || !payload.ok) throw new Error(payload.message || (response.status === 409 ? "上一轮回答仍在生成，请稍候。" : "无法回答，请稍后重试。"));
       renderMessage({role: "assistant", content: payload.answer, structured_payload: payload.payload, status: payload.status, created_at: new Date().toISOString(), id: payload.message_id});
       loadConversationList();

@@ -268,6 +268,8 @@ class LiteratureDetailViewTests(TestCase):
         self.assertContains(response, 'data-status-url=')
         self.assertContains(response, 'id="skeleton-generation-progress"')
         self.assertContains(response, "正在加载对话历史")
+        self.assertContains(response, "正在检索当前论文 Evidence")
+        self.assertContains(response, "chatElapsedTimer")
         self.assertContains(response, "Ctrl/⌘ + Enter")
 
     def test_latest_failure_does_not_hide_previous_successful_result(self):
