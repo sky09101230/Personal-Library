@@ -128,7 +128,26 @@
           {% endfor %}
         </div>
         {% if skeleton.payload.coverage.partial %}<p class="subtle">此总览基于部分原文；请结合证据核对全文。</p>{% endif %}
-        {% for figure in skeleton.payload.figures %}<section class="skeleton-section"><h4>图示解读 {{ forloop.counter }}</h4>{% for claim in figure.claims %}<p>{{ claim.text }}</p><div class="evidence-links">{% for evidence_id in claim.evidence_ids %}<a href="{% url 'paper-evidence-detail' literature.pk result_parse.pk evidence_id %}" target="_blank" rel="noopener">查看证据</a>{% endfor %}</div>{% empty %}<p class="subtle">当前来源未能支持该图的解读。</p>{% endfor %}</section>{% endfor %}
+        {% for figure in skeleton_figures %}
+        <section class="skeleton-section figure-walkthrough">
+          <h4>{{ figure.title }}</h4>
+          {% if figure.source_note %}<p class="subtle">{{ figure.source_note }}</p>{% endif %}
+          <div class="paper-figure-images">
+            {% for image in figure.images %}
+            <figure class="paper-figure-preview">
+              <a href="{{ image.url }}" target="_blank" rel="noopener" aria-label="放大查看 {{ image.alt }}">
+                <img src="{{ image.url }}" alt="{{ image.alt }}" loading="lazy" decoding="async" class="paper-figure-image">
+              </a>
+              <p class="paper-figure-error subtle" hidden>图片暂时无法读取，请打开 PDF 查看原图。</p>
+              <figcaption><a href="{{ image.url }}" target="_blank" rel="noopener">放大查看原图</a></figcaption>
+            </figure>
+            {% empty %}<p class="subtle">当前解析没有可用图片，请打开 PDF 查看原图。</p>{% endfor %}
+          </div>
+          {% if figure.pdf_url %}<a class="row-action" href="{{ figure.pdf_url }}" target="_blank" rel="noopener">查看 PDF 对应页</a>{% endif %}
+          {% if figure.captions %}<details class="paper-figure-caption"><summary>原文图注</summary>{% for caption in figure.captions %}<p>{{ caption.text }}</p><a href="{{ caption.url }}" target="_blank" rel="noopener">查看图注证据</a>{% endfor %}</details>{% endif %}
+          {% for claim in figure.claims %}<p>{{ claim.text }}</p><div class="evidence-links">{% for evidence_id in claim.evidence_ids %}<a href="{% url 'paper-evidence-detail' literature.pk result_parse.pk evidence_id %}" target="_blank" rel="noopener">查看证据</a>{% endfor %}</div>{% empty %}<p class="subtle">当前来源未能支持该图的解读。</p>{% endfor %}
+        </section>
+        {% endfor %}
       {% elif skeleton_empty %}
         <p class="reader-notice">旧总览没有生成有效的带证据结论，不能据此判断论文本身证据不足。请重新生成总览。</p>
       {% else %}
@@ -216,6 +235,14 @@
 .task-elapsed { font-size:.85em; opacity:.75; }
 @keyframes task-spin { to { transform:rotate(360deg); } }
 button:disabled { cursor:wait; opacity:.65; }
+.paper-figure-images { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr)); gap:12px; margin:12px 0; }
+.paper-figure-preview { margin:0; padding:10px; background:#fff; border:1px solid #dce6df; border-radius:8px; min-width:0; }
+.paper-figure-image { display:block; width:100%; max-height:420px; object-fit:contain; }
+.paper-figure-preview figcaption { margin-top:8px; font-size:12px; }
+.paper-figure-error[hidden], .paper-figure-image[hidden] { display:none !important; }
+.paper-figure-caption { margin:12px 0; }
+.paper-figure-caption summary { cursor:pointer; color:var(--accent); }
+.paper-figure-caption p { overflow-wrap:anywhere; }
 .skeleton-section { padding:8px 0; border-bottom:1px solid #dde7e2; }
 .reader-notice { padding:16px; background:#fff5db; border-radius:6px; }
 @media(max-width:800px) { .reader-grid { grid-template-columns:1fr; } }
@@ -223,6 +250,14 @@ button:disabled { cursor:wait; opacity:.65; }
 </style>
 <script>
 (() => {
+  document.addEventListener('error', event => {
+    const image = event.target;
+    if (image.classList?.contains('paper-figure-image')) {
+      image.hidden = true;
+      const message = image.closest('figure')?.querySelector('.paper-figure-error');
+      if (message) message.hidden = false;
+    }
+  }, true);
   const tabs = Array.from(document.querySelectorAll('.reader-tabs [role="tab"]'));
   const panels = Array.from(document.querySelectorAll('.reader-panel'));
   function showFromHash() {

@@ -1,12 +1,14 @@
 from django.contrib.auth.decorators import login_required
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, render
+from django.urls import reverse
 from django.views.decorators.http import require_GET
 
 from apps.box_upload.models import CanonicalDocument, UploadedDocument
 
 from .models import DocumentAnalysis, DocumentParse, DocumentProcessingJob
 from .skeleton import has_supported_claims
+from .evidence import EvidenceError, build_catalog
 
 
 _STATUS_LABELS = {
@@ -76,6 +78,7 @@ def literature_detail(request, document_id):
             "result_parse": result_parse,
             "overview": overview,
             "skeleton": skeleton,
+            "skeleton_figures": _skeleton_figure_cards(skeleton, result_parse),
             "paper_ai_enabled": literature.index_status == CanonicalDocument.IndexStatus.PUBLISHED,
             "skeleton_empty": bool(skeleton and not has_supported_claims(skeleton.payload)),
             "skeleton_sections": [(label, (skeleton.payload.get("sections") or {}).get(key, {})) for key, label in (
@@ -86,6 +89,61 @@ def literature_detail(request, document_id):
             "source_upload": source_upload,
         },
     )
+
+
+def _skeleton_figure_cards(skeleton, document_parse):
+    if not skeleton or not document_parse:
+        return []
+    entries = skeleton.payload.get("figures", [])
+    if not entries:
+        return []
+    try:
+        catalog = build_catalog(document_parse)
+    except EvidenceError:
+        return [{**entry, "images": [], "captions": [], "title": "原文图示"} for entry in entries]
+    figures = [item for item in catalog.items if item.kind == "figure"]
+    document_id = document_parse.canonical_document.pk
+    cards = []
+    for entry in entries:
+        saved = catalog.by_id.get(entry.get("evidence_id"))
+        if saved is not None and saved.kind != "figure":
+            saved = None
+        cited_ids = {eid for claim in entry.get("claims", []) for eid in claim.get("evidence_ids", [])}
+        # A legacy model may pair a Figure ID with another figure's caption.
+        # Resolve only a uniquely cited, parse-local caption; never guess from
+        # the prose's figure number or change the stored Evidence identity.
+        caption_ids = {eid for figure in figures for eid in figure.caption_evidence_ids if eid in cited_ids}
+        resolved = saved
+        if len(caption_ids) == 1:
+            resolved = next((figure for figure in figures if caption_ids & set(figure.caption_evidence_ids)), saved)
+        images = []
+        captions = []
+        source_note = ""
+        if resolved:
+            if saved and not set(saved.caption_evidence_ids) & set(resolved.caption_evidence_ids) and saved.evidence_id != resolved.evidence_id:
+                source_note = "旧解读的图片标识与引用图注不一致；这里按引用的原文图注展示。"
+            related = [resolved]
+            if len(resolved.caption_evidence_ids) == 1:
+                related = [figure for figure in figures if figure.caption_evidence_ids == resolved.caption_evidence_ids]
+            seen_paths = set()
+            for figure in related:
+                handle = figure.asset_handle or {}
+                path_key = (handle.get("segment_index"), handle.get("asset_path"))
+                if not handle.get("asset_path") or path_key in seen_paths:
+                    continue
+                seen_paths.add(path_key)
+                images.append({
+                    "url": reverse("paper-figure-asset", args=[document_id, document_parse.pk, figure.evidence_id]),
+                    "alt": f"Fig. {resolved.figure_label}" if resolved.figure_label else "原文图示",
+                })
+            for eid in resolved.caption_evidence_ids:
+                caption = catalog.by_id.get(eid)
+                if caption:
+                    captions.append({"text": caption.text, "url": reverse("paper-evidence-detail", args=[document_id, document_parse.pk, eid])})
+        cards.append({**entry, "images": images, "captions": captions, "source_note": source_note,
+                      "title": f"Fig. {resolved.figure_label} · 图示解读" if resolved and resolved.figure_label else "原文图示 · 解读",
+                      "pdf_url": reverse("view-document", args=[document_parse.uploaded_document.pk]) + f"#page={resolved.pages[0]}" if resolved and resolved.pages else ""})
+    return cards
 
 
 @login_required

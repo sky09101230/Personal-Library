@@ -1,6 +1,8 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
+from unittest.mock import patch
+from ..evidence import Evidence, EvidenceCatalog
 
 from apps.box_upload.models import CanonicalDocument, UploadedDocument
 
@@ -338,3 +340,58 @@ class LiteratureDetailViewTests(TestCase):
         self.assertContains(response, 'aria-controls="paper-overview" aria-selected="true"')
         self.assertContains(response, "hash : 'paper-overview'")
         self.assertContains(response, "hash.startsWith('chunk-') ? 'parsed-content'")
+
+    @patch('apps.literature_processing.views.build_catalog')
+    def test_skeleton_displays_images_matched_to_its_cited_caption(self, catalog_builder):
+        from ..skeleton import SECTION_KEYS
+        _, document_parse, _, _ = self.create_result()
+        self.literature.index_status = 'published'
+        self.literature.save()
+        old = Evidence('ev1:old', 'figure', document_parse.pk, document_parse.artifact_sha256, '', (1,),
+                       figure_label='2', asset_handle={'segment_index': 0, 'asset_path': 'fig2.jpg'}, caption_evidence_ids=('caption2',))
+        caption = Evidence('caption3', 'text', document_parse.pk, document_parse.artifact_sha256, 'Fig. 3. Simulation.', (2,))
+        parts = [Evidence(f'fig3-{n}', 'figure', document_parse.pk, document_parse.artifact_sha256, '', (2,),
+                         figure_label='3', asset_handle={'segment_index': 0, 'asset_path': f'fig3-{n}.jpg'},
+                         caption_evidence_ids=('caption3',)) for n in range(2)]
+        catalog_builder.return_value = EvidenceCatalog(document_parse, [old, caption, *parts])
+        claim = {'text': '图3展示模拟结果。', 'evidence_ids': ['caption3'], 'kind': 'interpretation'}
+        DocumentAnalysis.objects.create(document_parse=document_parse, analysis_type='paper_skeleton',
+            schema_version='personal.paper-skeleton.v1', provider='test', model='test', prompt_version='test', input_fingerprint='c'*64,
+            payload={'language': 'zh-CN', 'sections': {key: {'status': 'supported', 'claims': [claim]} for key in SECTION_KEYS},
+                     'figures': [{'evidence_id': old.evidence_id, 'status': 'supported', 'claims': [claim]}],
+                     'limitations': [], 'coverage': {}})
+        self.client.force_login(self.user)
+        response = self.client.get(self.url)
+        self.assertContains(response, 'Fig. 3 · 图示解读')
+        self.assertContains(response, '按引用的原文图注展示')
+        self.assertContains(response, 'loading="lazy"', count=2)
+        for part in parts:
+            self.assertContains(response, reverse('paper-figure-asset', args=[self.literature.pk, document_parse.pk, part.evidence_id]))
+        self.assertNotContains(response, reverse('paper-figure-asset', args=[self.literature.pk, document_parse.pk, old.evidence_id]))
+        self.assertContains(response, 'Fig. 3. Simulation.')
+        self.assertContains(response, f'{reverse("view-document", args=[self.upload.pk])}#page=2')
+
+    @patch('apps.literature_processing.reader_views.read_figure_asset', return_value=('image/jpeg', b'\xff\xd8\xfftest'))
+    @patch('apps.literature_processing.reader_views.build_catalog')
+    def test_figure_image_endpoint_is_authenticated_and_parse_scoped(self, catalog_builder, asset_reader):
+        _, document_parse, _, _ = self.create_result()
+        self.literature.index_status = 'published'
+        self.literature.save()
+        figure = Evidence('figure-test', 'figure', document_parse.pk, document_parse.artifact_sha256, '', (2,))
+        catalog_builder.return_value = EvidenceCatalog(document_parse, [figure])
+        url = reverse('paper-figure-asset', args=[self.literature.pk, document_parse.pk, figure.evidence_id])
+        self.assertEqual(self.client.get(url).status_code, 302)
+        asset_reader.assert_not_called()
+        self.client.force_login(self.user)
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'image/jpeg')
+        self.assertEqual(response['Cache-Control'], 'private, no-store')
+        self.assertEqual(response['X-Content-Type-Options'], 'nosniff')
+        asset_reader.reset_mock()
+        self.assertEqual(self.client.get(reverse('paper-figure-asset', args=[self.literature.pk, document_parse.pk+100, figure.evidence_id])).status_code, 404)
+        asset_reader.assert_not_called()
+        self.literature.index_status = 'pending'
+        self.literature.save()
+        self.assertEqual(self.client.get(url).status_code, 404)
+        asset_reader.assert_not_called()
