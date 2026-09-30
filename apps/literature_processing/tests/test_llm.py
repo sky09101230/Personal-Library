@@ -33,6 +33,7 @@ class LLMProviderTests(SimpleTestCase):
         self.assertEqual(result.returned_model, 'overview-model')
         self.assertEqual(calls[0][0], 'http://localhost:53347/v1/chat/completions')
         self.assertEqual(calls[0][1]['response_format'], {'type': 'json_object'})
+        self.assertEqual(calls[0][1]['reasoning_effort'], 'medium')
 
     @patch('apps.literature_processing.llm.socket.getaddrinfo', return_value=[(2, 1, 6, '', ('127.0.0.1', 53347))])
     def test_invalid_public_http_and_partial_profile(self, _resolve):

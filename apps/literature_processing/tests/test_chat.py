@@ -4,6 +4,8 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.utils import timezone
+from datetime import timedelta
 
 from apps.box_upload.models import CanonicalDocument, UploadedDocument
 
@@ -54,3 +56,22 @@ class PaperChatTests(TestCase):
         conversation = create_conversation(self.user, self.document.pk, parse_id=self.parse.pk)
         with self.assertRaisesMessage(ChatError, 'unavailable'):
             ask_conversation(conversation, self.other, 'question', provider=self.provider)
+
+    def test_question_without_matches_returns_insufficient_evidence_success(self):
+        conversation = create_conversation(self.user, self.document.pk, parse_id=self.parse.pk)
+        message = ask_conversation(conversation, self.user, '你好', request_id='no-match', provider=self.provider)
+        self.assertEqual(message.status, PaperChatMessage.Status.SUCCEEDED)
+        self.assertEqual(message.structured_payload['status'], 'insufficient_evidence')
+        self.assertIn('没有找到', message.content)
+
+    def test_expired_pending_turn_is_released(self):
+        conversation = create_conversation(self.user, self.document.pk, parse_id=self.parse.pk)
+        PaperChatMessage.objects.create(conversation=conversation, request_id='old', sequence=0,
+            role=PaperChatMessage.Role.USER, content='old')
+        pending = PaperChatMessage.objects.create(conversation=conversation, request_id='old', sequence=1,
+            role=PaperChatMessage.Role.ASSISTANT, content='处理中', status=PaperChatMessage.Status.PENDING,
+            lease_expires_at=timezone.now() - timedelta(seconds=1))
+        message = ask_conversation(conversation, self.user, '你好', request_id='new', provider=self.provider)
+        pending.refresh_from_db()
+        self.assertEqual(pending.error_code, 'lease_expired')
+        self.assertEqual(message.status, PaperChatMessage.Status.SUCCEEDED)

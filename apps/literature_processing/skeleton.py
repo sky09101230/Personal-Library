@@ -106,8 +106,17 @@ def generate_skeleton(document_parse, user, *, provider=None, force=False, reque
         return run
     except Exception as exc:
         run.status = PaperAnalysisRun.Status.FAILED
-        run.error_code = (getattr(exc, "code", None) or "generation_failed")[:64]
-        run.error_message = "总览生成失败；请检查模型配置、输出格式或稍后重试。"
+        if getattr(exc, "code", None):
+            run.error_code = str(exc.code)[:64]
+        elif isinstance(exc, ValidationError):
+            run.error_code = "invalid_output"
+        else:
+            run.error_code = "generation_failed"
+        run.error_message = {
+            "transport_error": "模型接口连接或超时，请稍后重试。",
+            "invalid_output": "模型返回内容未通过结构化验证，请重新生成。",
+            "empty_analysis": "模型没有生成带证据的结论，请重新生成。",
+        }.get(run.error_code, "总览生成失败，请稍后重试。")
         run.completed_at = timezone.now()
         run.lease_expires_at = None
         run.save(update_fields=("status", "error_code", "error_message", "completed_at", "lease_expires_at"))

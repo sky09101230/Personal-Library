@@ -11,7 +11,7 @@ from django.utils import timezone
 from .evidence import validate_claims
 from .models import PaperChatMessage, PaperConversation
 from .paper_access import open_paper
-from .paper_context import build_context_packet
+from .paper_context import ContextError, build_context_packet
 
 
 CHAT_SCHEMA_VERSION = "personal.paper-chat.v1"
@@ -41,6 +41,14 @@ def ask_conversation(conversation, user, question, *, request_id=None, provider=
     with transaction.atomic():
         conversation = PaperConversation.objects.select_for_update().get(pk=conversation.pk, user=user)
         pending = conversation.messages.filter(role=PaperChatMessage.Role.ASSISTANT, status=PaperChatMessage.Status.PENDING).first()
+        if pending is not None and pending.lease_expires_at and pending.lease_expires_at <= now:
+            pending.status = PaperChatMessage.Status.FAILED
+            pending.error_code = "lease_expired"
+            pending.error_message = "上一轮回答已超时，请重新提问。"
+            pending.completed_at = now
+            pending.lease_expires_at = None
+            pending.save(update_fields=("status", "error_code", "error_message", "completed_at", "lease_expires_at"))
+            pending = None
         if pending is not None:
             raise ChatError("busy", "A response is already being generated.")
         sequence = conversation.messages.count()
@@ -56,7 +64,22 @@ def ask_conversation(conversation, user, question, *, request_id=None, provider=
     try:
         parse, catalog = open_paper(user, conversation.document_parse.uploaded_document.canonical_document_id,
                                     parse_id=conversation.document_parse_id)
-        packet = build_context_packet(catalog, question, history=_history(conversation), budget=12000, provider=provider)
+        try:
+            packet = build_context_packet(catalog, question, history=_history(conversation), budget=12000, provider=provider)
+        except ContextError as exc:
+            if exc.code == "insufficient_retrieval":
+                assistant.structured_payload = {"schema_version": CHAT_SCHEMA_VERSION, "status": "insufficient_evidence", "claims": []}
+                assistant.content = "当前论文中没有找到足以支持该问题的证据。请换一个与论文内容相关的问题。"
+                assistant.status = PaperChatMessage.Status.SUCCEEDED
+                assistant.prompt_version = CHAT_PROMPT_VERSION
+                assistant.schema_version = CHAT_SCHEMA_VERSION
+                assistant.error_code = ""
+                assistant.error_message = ""
+                assistant.completed_at = timezone.now()
+                assistant.lease_expires_at = None
+                assistant.save()
+                return assistant
+            raise
         if provider is None:
             raise ChatError("provider_unavailable", "Paper LLM provider is unavailable.")
         result = provider("chat", [{"role": "system", "content": _system_prompt()},

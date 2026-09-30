@@ -49,6 +49,7 @@ class LLMConfig:
     json_mode: bool = True
     vision_enabled: bool = False
     streaming_enabled: bool = False
+    reasoning_effort: str = "medium"
     profile: str = "paper"
 
 
@@ -97,6 +98,8 @@ def complete(role, messages, *, output_mode="text", images=None, config=None, re
     if output_mode not in {"text", "json"}:
         raise LLMError("invalid_configuration", "Unsupported LLM output mode.")
     body = {"model": model, "messages": messages, "temperature": 0, "max_tokens": max(1, int(max_tokens))}
+    if config.reasoning_effort:
+        body["reasoning_effort"] = config.reasoning_effort
     if output_mode == "json" and config.json_mode:
         body["response_format"] = {"type": "json_object"}
     if images:
@@ -138,6 +141,7 @@ def _build_config(*, base_url, api_key, chat_model, overview_model, vision_model
         max_retries=retries, json_mode=environ.get(prefix + "LLM_JSON_MODE", "true").lower() == "true",
         vision_enabled=bool(vision_model and environ.get(prefix + "LLM_VISION_ENABLED", "true").lower() == "true"),
         streaming_enabled=environ.get(prefix + "LLM_STREAMING_ENABLED", "false").lower() == "true",
+        reasoning_effort=environ.get(prefix + "LLM_REASONING_EFFORT", "medium").strip() or "medium",
         profile=profile,
     )
 
