@@ -5,7 +5,7 @@ from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from django.views.decorators.http import require_GET, require_POST
 
-from .chat import ChatError, ask_conversation, create_conversation
+from .chat import ChatError, ask_conversation, create_conversation, release_expired_pending
 from .models import PaperConversation
 from .llm import complete
 
@@ -41,6 +41,8 @@ def conversation_list(request, document_id):
     ).prefetch_related("messages")[:50]
     items = []
     for conversation in conversations:
+        release_expired_pending(conversation)
+        conversation._prefetched_objects_cache.pop("messages", None)
         messages = list(conversation.messages.all())
         latest_question = next((item.content for item in reversed(messages) if item.role == item.Role.USER), "")
         pending = next((item for item in reversed(messages) if item.role == item.Role.ASSISTANT and item.status == item.Status.PENDING), None)
@@ -76,6 +78,8 @@ def conversation_ask(request, conversation_id):
 @require_GET
 def conversation_messages(request, conversation_id):
     conversation = get_object_or_404(PaperConversation, pk=conversation_id, user=request.user)
+    release_expired_pending(conversation)
+    conversation.refresh_from_db(fields=("title", "updated_at"))
     return JsonResponse({"conversation_id": str(conversation.pk), "parse_id": conversation.document_parse_id,
                          "title": conversation.title,
                          "messages": list(conversation.messages.order_by("sequence").values(

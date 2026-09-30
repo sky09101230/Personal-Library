@@ -104,3 +104,20 @@ class PaperChatViewTests(TestCase):
         self.assertEqual(payload["title"], "历史")
         self.assertEqual(payload["messages"][1]["error_code"], "transport_error")
         self.assertEqual(payload["messages"][1]["error_message"], "接口超时")
+
+    def test_messages_endpoint_releases_expired_pending_turn(self):
+        conversation = create_conversation(self.user, self.document.pk, parse_id=self.parse.pk)
+        pending = PaperChatMessage.objects.create(
+            conversation=conversation, request_id="q-old", sequence=0,
+            role=PaperChatMessage.Role.ASSISTANT, content="处理中",
+            status=PaperChatMessage.Status.PENDING,
+            lease_expires_at=timezone.now() - timedelta(seconds=1),
+        )
+
+        response = self.client.get(reverse("paper-chat-messages", args=[conversation.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        pending.refresh_from_db()
+        self.assertEqual(pending.status, PaperChatMessage.Status.FAILED)
+        self.assertEqual(payload["messages"][0]["error_code"], "lease_expired")

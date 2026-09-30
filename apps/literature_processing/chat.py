@@ -26,6 +26,26 @@ class ChatError(RuntimeError):
         self.details = details or {}
 
 
+def release_expired_pending(conversation):
+    """Mark an orphaned assistant turn failed so readers do not poll it forever."""
+    now = timezone.now()
+    with transaction.atomic():
+        locked = PaperConversation.objects.select_for_update().get(pk=conversation.pk)
+        pending = locked.messages.filter(
+            role=PaperChatMessage.Role.ASSISTANT,
+            status=PaperChatMessage.Status.PENDING,
+        ).first()
+        if pending is None or (pending.lease_expires_at and pending.lease_expires_at > now):
+            return pending
+        pending.status = PaperChatMessage.Status.FAILED
+        pending.error_code = "lease_expired"
+        pending.error_message = "上一轮回答已超时，请重新提问。"
+        pending.completed_at = now
+        pending.lease_expires_at = None
+        pending.save(update_fields=("status", "error_code", "error_message", "completed_at", "lease_expires_at"))
+        return None
+
+
 def create_conversation(user, document_id, *, parse_id=None, title=""):
     parse, _ = open_paper(user, document_id, parse_id=parse_id)
     return PaperConversation.objects.create(user=user, document_parse=parse, title=title[:200])
@@ -47,7 +67,7 @@ def ask_conversation(conversation, user, question, *, request_id=None, provider=
     with transaction.atomic():
         conversation = PaperConversation.objects.select_for_update().get(pk=conversation.pk, user=user)
         pending = conversation.messages.filter(role=PaperChatMessage.Role.ASSISTANT, status=PaperChatMessage.Status.PENDING).first()
-        if pending is not None and pending.lease_expires_at and pending.lease_expires_at <= now:
+        if pending is not None and (not pending.lease_expires_at or pending.lease_expires_at <= now):
             pending.status = PaperChatMessage.Status.FAILED
             pending.error_code = "lease_expired"
             pending.error_message = "上一轮回答已超时，请重新提问。"
