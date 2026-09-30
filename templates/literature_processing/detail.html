@@ -500,6 +500,15 @@ button:disabled { cursor:wait; opacity:.65; }
       showWelcome();
     }
   };
+  const waitForPending = async () => {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      await loadHistory();
+      if (!messages.querySelector('.chat-message.pending')) return;
+      setStatus(`上一轮仍在生成…（已等待 ${attempt + 1} 秒）`);
+      await new Promise(resolve => window.setTimeout(resolve, 1000));
+    }
+    setStatus("上一轮生成时间较长；可稍后刷新查看结果。");
+  };
   const createConversation = async () => {
     const response = await fetch(form.dataset.createUrl, {method: "POST", credentials: "same-origin", headers: {"X-CSRFToken": csrfToken, "Content-Type": "application/json"}, body: JSON.stringify({parse_id: Number(shell.dataset.storageKey.split(":").pop())})});
     const payload = await response.json().catch(() => ({}));
@@ -548,8 +557,8 @@ button:disabled { cursor:wait; opacity:.65; }
       const payload = await response.json().catch(() => ({}));
       pending.remove();
       if (response.status === 409) {
-        await loadHistory();
-        setStatus(payload.message || "上一轮回答仍在生成，请稍候；已刷新当前对话状态。");
+        await waitForPending();
+        setStatus(payload.message || "已刷新当前对话状态。");
         return;
       }
       if (!response.ok || !payload.ok) throw new Error(payload.message || (response.status === 409 ? "上一轮回答仍在生成，请稍候。" : "无法回答，请稍后重试。"));
