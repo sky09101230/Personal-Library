@@ -12,6 +12,7 @@ from apps.box_upload.models import CanonicalDocument, UploadedDocument
 from ..evidence import Evidence, EvidenceCatalog
 from ..models import DocumentParse, DocumentProcessingJob
 from ..skeleton import generate_skeleton, validate_skeleton_payload, SkeletonError
+from ..llm import LLMError
 from ..paper_context import build_skeleton_context
 from ..versions import PARSER_VERSION, PROMPT_VERSION
 
@@ -110,6 +111,26 @@ class SkeletonTests(TestCase):
         self.assertEqual(complete.call_args.kwargs['config'].max_retries, 0)
         self.assertEqual(complete.call_args.kwargs['max_tokens'], 2048)
         self.assertEqual(config.return_value.timeout, 30)
+
+    @patch('apps.literature_processing.skeleton.load_config')
+    @patch('apps.literature_processing.skeleton.complete')
+    @patch('apps.literature_processing.skeleton.build_skeleton_context')
+    def test_default_provider_retries_transport_with_compact_context(self, builder, complete, config):
+        from ..llm import LLMConfig
+        config.return_value = LLMConfig('http://localhost:53347/v1', 'dummy', 'chat', 'overview')
+        initial = {'allowed_evidence_ids': [self.item.evidence_id], 'items': [{'evidence_id': self.item.evidence_id, 'text': self.item.text}]}
+        compact = {**initial, 'context_version': 'compact'}
+        builder.side_effect = [initial, compact]
+        complete.side_effect = [LLMError('transport_error', 'timeout', retryable=True),
+                                SimpleNamespace(content=json.dumps(self.payload()), provider='test', returned_model='overview')]
+
+        run = generate_skeleton(self.parse, self.user, catalog=self.catalog)
+
+        self.assertEqual(run.status, 'succeeded')
+        self.assertEqual(builder.call_count, 2)
+        self.assertEqual(complete.call_count, 2)
+        self.assertEqual(complete.call_args.kwargs['config'].reasoning_effort, 'low')
+        self.assertEqual(run.context_manifest['context_version'], 'compact')
 
     @patch.dict('os.environ', {'PAPER_SKELETON_MAX_TOKENS': '256'}, clear=False)
     @patch('apps.literature_processing.skeleton.load_config')
