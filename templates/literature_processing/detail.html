@@ -144,7 +144,8 @@
     </article>
     <article aria-labelledby="chat-title">
       <h3 id="chat-title">Paper Chat</h3>
-      <div id="paper-chat-shell" class="chat-shell" data-storage-key="paper-chat:{{ literature.pk }}:{% if result_parse %}{{ result_parse.pk }}{% endif %}" data-messages-base="{% url 'paper-chat-messages' '00000000-0000-0000-0000-000000000000' %}" data-evidence-base="{% if result_parse %}{% url 'paper-evidence-detail' literature.pk result_parse.pk 'EVIDENCE_ID' %}{% endif %}">
+      <div id="paper-chat-shell" class="chat-shell" data-storage-key="paper-chat:{{ literature.pk }}:{% if result_parse %}{{ result_parse.pk }}{% endif %}" data-list-url="{% if result_parse %}{% url 'paper-chat-list' literature.pk %}{% endif %}" data-messages-base="{% url 'paper-chat-messages' '00000000-0000-0000-0000-000000000000' %}" data-evidence-base="{% if result_parse %}{% url 'paper-evidence-detail' literature.pk result_parse.pk 'EVIDENCE_ID' %}{% endif %}">
+        <div class="chat-history" aria-label="历史对话"><div class="chat-history-head"><strong>历史对话</strong><button type="button" id="paper-chat-new" class="row-action">新对话</button></div><div id="paper-chat-history-list" class="chat-history-list" role="listbox" aria-label="选择历史对话"><span class="subtle">正在加载…</span></div></div>
         <div id="paper-chat-messages" class="chat-messages" aria-live="polite" aria-label="对话历史"><p class="subtle chat-empty">回答只基于当前 parse 的 Evidence。发送第一个问题开始对话。</p></div>
         <p id="paper-chat-status" class="chat-status" role="status" aria-live="polite"></p>
         {% if result_parse %}<form id="paper-chat-form" data-create-url="{% url 'paper-chat-create' literature.pk %}" data-ask-base="{% url 'paper-chat-ask' '00000000-0000-0000-0000-000000000000' %}">
@@ -178,6 +179,14 @@
 #paper-chat-question { width:100%; box-sizing:border-box; min-height:92px; padding:12px; border:1px solid #bcd2c7; border-radius:6px; font:inherit; resize:vertical; }
 #paper-chat-form button { justify-self:start; }
 .chat-shell { display:grid; gap:12px; }
+.chat-history { display:grid; gap:8px; padding:10px 12px; border:1px solid #dde7e2; border-radius:8px; background:#fff; }
+.chat-history-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.chat-history-head button { padding:5px 9px; font-size:.85em; }
+.chat-history-list { display:flex; gap:6px; overflow-x:auto; padding-bottom:2px; }
+.chat-history-item { flex:0 0 auto; max-width:220px; padding:7px 10px; text-align:left; border:1px solid #cbded5; border-radius:6px; background:#f6faf8; color:inherit; cursor:pointer; }
+.chat-history-item[aria-selected="true"] { border-color:#195440; box-shadow:0 0 0 1px #195440 inset; background:#e7f2ec; }
+.chat-history-item strong, .chat-history-item small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chat-history-item small { margin-top:2px; color:#607d70; }
 .chat-messages { display:flex; flex-direction:column; gap:12px; min-height:180px; max-height:520px; overflow-y:auto; padding:12px; background:#f6faf8; border:1px solid #dde7e2; border-radius:8px; scroll-behavior:smooth; }
 .chat-empty { margin:auto; text-align:center; }
 .chat-message { display:flex; flex-direction:column; gap:5px; max-width:88%; padding:10px 12px; border-radius:10px; line-height:1.55; white-space:pre-wrap; overflow-wrap:anywhere; }
@@ -368,6 +377,8 @@ button:disabled { cursor:wait; opacity:.65; }
   if (!form) return;
   const shell = document.getElementById("paper-chat-shell");
   const messages = document.getElementById("paper-chat-messages");
+  const historyList = document.getElementById("paper-chat-history-list");
+  const newChatButton = document.getElementById("paper-chat-new");
   const chatStatus = document.getElementById("paper-chat-status");
   const questionInput = document.getElementById("paper-chat-question");
   const submitButton = form.querySelector("button[type=submit]");
@@ -423,6 +434,47 @@ button:disabled { cursor:wait; opacity:.65; }
   const showWelcome = () => {
     if (!messages.childElementCount) messages.innerHTML = '<p class="subtle chat-empty">回答只基于当前 parse 的 Evidence。发送第一个问题开始对话。</p>';
   };
+  const renderConversationList = (items) => {
+    if (!historyList) return;
+    historyList.innerHTML = "";
+    if (!items.length) {
+      historyList.innerHTML = '<span class="subtle">还没有历史对话</span>';
+      return;
+    }
+    items.forEach((item) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "chat-history-item";
+      button.dataset.conversationId = item.conversation_id;
+      button.setAttribute("role", "option");
+      button.setAttribute("aria-selected", String(item.conversation_id === conversationId));
+      const title = document.createElement("strong");
+      title.textContent = item.title || "未命名对话";
+      const preview = document.createElement("small");
+      preview.textContent = item.preview || `${item.message_count || 0} 条消息`;
+      button.append(title, preview);
+      button.addEventListener("click", async () => {
+        conversationId = item.conversation_id;
+        try { window.localStorage.setItem(storageKey, conversationId); } catch (_) {}
+        renderConversationList(items);
+        await loadHistory();
+      });
+      historyList.appendChild(button);
+    });
+  };
+  const loadConversationList = async () => {
+    if (!historyList || !shell.dataset.listUrl) return [];
+    try {
+      const response = await fetch(shell.dataset.listUrl, {credentials: "same-origin", cache: "no-store"});
+      if (!response.ok) throw new Error("history_list_unavailable");
+      const payload = await response.json();
+      renderConversationList(payload.conversations || []);
+      return payload.conversations || [];
+    } catch (_) {
+      historyList.innerHTML = '<span class="subtle">历史对话暂时不可用</span>';
+      return [];
+    }
+  };
   const loadHistory = async () => {
     if (!conversationId) { showWelcome(); return; }
     messages.innerHTML = '<p class="subtle chat-empty">正在加载对话历史…</p>';
@@ -448,6 +500,7 @@ button:disabled { cursor:wait; opacity:.65; }
     if (!response.ok || !payload.conversation_id) throw new Error(payload.message || "无法创建会话。");
     conversationId = payload.conversation_id;
     try { window.localStorage.setItem(storageKey, conversationId); } catch (_) {}
+    loadConversationList();
     return conversationId;
   };
   const setChatBusy = (busy) => {
@@ -459,6 +512,16 @@ button:disabled { cursor:wait; opacity:.65; }
   questionInput.addEventListener("keydown", event => {
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); form.requestSubmit(); }
   });
+  if (newChatButton) newChatButton.addEventListener("click", () => {
+    conversationId = null;
+    try { window.localStorage.removeItem(storageKey); } catch (_) {}
+    messages.innerHTML = "";
+    showWelcome();
+    loadConversationList();
+    setStatus("已开始新对话。");
+    questionInput.focus();
+  });
+  loadConversationList();
   const historyReady = loadHistory();
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -478,6 +541,7 @@ button:disabled { cursor:wait; opacity:.65; }
       pending.remove();
       if (!response.ok || !payload.ok) throw new Error(payload.message || (response.status === 409 ? "上一轮回答仍在生成，请稍候。" : "无法回答，请稍后重试。"));
       renderMessage({role: "assistant", content: payload.answer, structured_payload: payload.payload, status: payload.status, created_at: new Date().toISOString(), id: payload.message_id});
+      loadConversationList();
       questionInput.value = "";
       setStatus("回答完成；引用链接已附在回答下方。");
     } catch (error) {

@@ -35,14 +35,21 @@ class SkeletonError(RuntimeError):
 def generate_skeleton(document_parse, user, *, provider=None, force=False, request_id=None, catalog=None):
     from .evidence import build_catalog
     profile = {}
+    max_tokens = 2048
     if provider is None or provider is complete:
         try:
             timeout = int(os.environ.get("PAPER_SKELETON_TIMEOUT", "180"))
             if not 1 <= timeout <= 300:
                 raise ValueError
+            max_tokens = int(os.environ.get("PAPER_SKELETON_MAX_TOKENS", "2048"))
+            if not 512 <= max_tokens <= 4096:
+                raise ValueError
             config = replace(load_config(), timeout=timeout, max_retries=0)
         except ValueError:
-            raise SkeletonError("invalid_configuration", "PAPER_SKELETON_TIMEOUT 必须为 1–300 秒。") from None
+            raise SkeletonError(
+                "invalid_configuration",
+                "PAPER_SKELETON_TIMEOUT 必须为 1–300 秒，PAPER_SKELETON_MAX_TOKENS 必须为 512–4096。",
+            ) from None
         except Exception:
             raise SkeletonError("invalid_configuration", "请配置 PAPER_CHAT_MODEL、PAPER_OVERVIEW_MODEL 和模型接口。") from None
         profile = {"base_url": config.base_url, "model": config.overview_model, "profile": config.profile}
@@ -72,7 +79,10 @@ def generate_skeleton(document_parse, user, *, provider=None, force=False, reque
             raise SkeletonError("provider_unavailable", "Paper LLM provider is unavailable.")
         messages = [{"role": "system", "content": _prompt()},
                     {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
-        result = provider("overview", messages, output_mode="json", max_tokens=4096)
+        # Skeletons have a fixed, compact schema.  Keeping the completion budget
+        # bounded prevents the local Cockpit proxy from timing out while the model
+        # spends tokens on unconstrained reasoning or repeated claims.
+        result = provider("overview", messages, output_mode="json", max_tokens=max_tokens)
         payload = json.loads(result.content if hasattr(result, "content") else result)
         # Coverage is measured by the server, never supplied as a model assertion.
         if isinstance(payload, dict):
