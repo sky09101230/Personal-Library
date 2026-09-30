@@ -144,7 +144,7 @@
     </article>
     <article aria-labelledby="chat-title">
       <h3 id="chat-title">Paper Chat</h3>
-      <div id="paper-chat-shell" class="chat-shell" data-storage-key="paper-chat:{{ literature.pk }}:{% if result_parse %}{{ result_parse.pk }}{% endif %}" data-list-url="{% if result_parse %}{% url 'paper-chat-list' literature.pk %}{% endif %}" data-messages-base="{% url 'paper-chat-messages' '00000000-0000-0000-0000-000000000000' %}" data-evidence-base="{% if result_parse %}{% url 'paper-evidence-detail' literature.pk result_parse.pk 'EVIDENCE_ID' %}{% endif %}">
+      <div id="paper-chat-shell" class="chat-shell" data-storage-key="paper-chat:{{ literature.pk }}:{% if result_parse %}{{ result_parse.pk }}{% endif %}" data-list-url="{% if result_parse %}{% url 'paper-chat-list' literature.pk %}{% endif %}" data-messages-base="{% url 'paper-chat-messages' '00000000-0000-0000-0000-000000000000' %}" data-delete-base="{% url 'paper-chat-delete' '00000000-0000-0000-0000-000000000000' %}" data-evidence-base="{% if result_parse %}{% url 'paper-evidence-detail' literature.pk result_parse.pk 'EVIDENCE_ID' %}{% endif %}">
         <div class="chat-history" aria-label="历史对话"><div class="chat-history-head"><strong>历史对话</strong><button type="button" id="paper-chat-new" class="row-action">新对话</button></div><div id="paper-chat-history-list" class="chat-history-list" role="listbox" aria-label="选择历史对话"><span class="subtle">正在加载…</span></div></div>
         <div id="paper-chat-messages" class="chat-messages" aria-live="polite" aria-label="对话历史"><p class="subtle chat-empty">回答只基于当前 parse 的 Evidence。发送第一个问题开始对话。</p></div>
         <p id="paper-chat-status" class="chat-status" role="status" aria-live="polite"></p>
@@ -184,15 +184,21 @@
 .chat-history-head button { padding:5px 9px; font-size:.85em; }
 .chat-history-list { display:flex; gap:6px; overflow-x:auto; padding-bottom:2px; }
 .chat-history-item { flex:0 0 auto; max-width:220px; padding:7px 10px; text-align:left; border:1px solid #cbded5; border-radius:6px; background:#f6faf8; color:inherit; cursor:pointer; }
+.chat-history-item { position:relative; padding-right:30px; }
 .chat-history-item[aria-selected="true"] { border-color:#195440; box-shadow:0 0 0 1px #195440 inset; background:#e7f2ec; }
 .chat-history-item strong, .chat-history-item small { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .chat-history-item small { margin-top:2px; color:#607d70; }
+.chat-history-delete { position:absolute; top:3px; right:3px; display:grid; place-items:center; width:20px; height:20px; padding:0; border:0; border-radius:50%; color:#8b4b4b; background:transparent; cursor:pointer; opacity:0; font-size:16px; line-height:1; }
+.chat-history-item:hover .chat-history-delete, .chat-history-item:focus-within .chat-history-delete { opacity:1; }
+.chat-history-delete:hover, .chat-history-delete:focus-visible { color:#fff; background:#b84d4d; opacity:1; }
 .chat-messages { display:flex; flex-direction:column; gap:12px; min-height:180px; max-height:520px; overflow-y:auto; padding:12px; background:#f6faf8; border:1px solid #dde7e2; border-radius:8px; scroll-behavior:smooth; }
 .chat-empty { margin:auto; text-align:center; }
 .chat-message { display:flex; flex-direction:column; gap:5px; max-width:88%; padding:10px 12px; border-radius:10px; line-height:1.55; white-space:pre-wrap; overflow-wrap:anywhere; }
 .chat-message-user { align-self:flex-end; background:#195440; color:#fff; border-bottom-right-radius:3px; }
 .chat-message-assistant { align-self:flex-start; background:#fff; border:1px solid #d7e5dd; border-bottom-left-radius:3px; }
 .chat-message-pending { opacity:.72; }
+.chat-message-pending .chat-message-body { display:inline-flex; align-items:center; gap:7px; }
+.chat-message-pending .chat-message-body::before { content:""; display:inline-block; width:11px; height:11px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:task-spin .8s linear infinite; flex:0 0 auto; }
 .chat-message-failed { border-color:#c65c5c; background:#fff5f5; }
 .chat-message-meta { display:flex; justify-content:space-between; gap:12px; font-size:.76rem; opacity:.72; }
 .chat-message-body { white-space:pre-wrap; }
@@ -401,8 +407,9 @@ button:disabled { cursor:wait; opacity:.65; }
     clearEmpty();
     const article = document.createElement("article");
     const role = message.role === "user" ? "user" : "assistant";
+    const isPending = pending || message.status === "pending";
     article.className = `chat-message chat-message-${role}`;
-    if (pending || message.status === "pending") article.classList.add("chat-message-pending");
+    if (isPending) article.classList.add("chat-message-pending");
     if (message.status === "failed") article.classList.add("chat-message-failed");
     article.dataset.messageId = message.id || "pending";
     const meta = document.createElement("div");
@@ -411,7 +418,7 @@ button:disabled { cursor:wait; opacity:.65; }
     article.appendChild(meta);
     const body = document.createElement("div");
     body.className = "chat-message-body";
-    body.textContent = pending ? "正在检索证据并生成回答…" : (message.content || message.error_message || "无法回答。");
+    body.textContent = isPending ? "正在检索证据并生成回答…" : (message.status === "failed" ? (message.error_message || "本轮回答失败，请重试。") : (message.content || message.error_message || "无法回答。"));
     article.appendChild(body);
     if (!pending && role === "assistant" && message.structured_payload?.claims?.length) {
       const links = document.createElement("div");
@@ -443,22 +450,60 @@ button:disabled { cursor:wait; opacity:.65; }
       return;
     }
     items.forEach((item) => {
-      const button = document.createElement("button");
-      button.type = "button";
+      const button = document.createElement("div");
       button.className = "chat-history-item";
       button.dataset.conversationId = item.conversation_id;
       button.setAttribute("role", "option");
+      button.setAttribute("tabindex", "0");
       button.setAttribute("aria-selected", String(item.conversation_id === conversationId));
       const title = document.createElement("strong");
       title.textContent = item.title || "未命名对话";
       const preview = document.createElement("small");
       preview.textContent = item.preview || `${item.message_count || 0} 条消息`;
-      button.append(title, preview);
-      button.addEventListener("click", async () => {
+      const deleteButton = document.createElement("button");
+      deleteButton.type = "button";
+      deleteButton.className = "chat-history-delete";
+      deleteButton.dataset.conversationId = item.conversation_id;
+      deleteButton.title = "删除此对话";
+      deleteButton.setAttribute("aria-label", `删除对话：${item.title || "未命名对话"}`);
+      deleteButton.textContent = "×";
+      deleteButton.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const name = item.title || "未命名对话";
+        if (!window.confirm(`确定删除对话“${name}”吗？删除后无法恢复。`)) return;
+        deleteButton.disabled = true;
+        setStatus("正在删除对话…");
+        try {
+          const deleteUrl = shell.dataset.deleteBase.replace("00000000-0000-0000-0000-000000000000", item.conversation_id);
+          const response = await fetch(deleteUrl, {method: "DELETE", credentials: "same-origin", headers: {"X-CSRFToken": csrfToken, "Accept": "application/json"}});
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok || payload.ok === false) throw new Error(payload.message || "删除对话失败，请稍后重试。");
+          const wasActive = conversationId === item.conversation_id;
+          if (wasActive) {
+            conversationId = null;
+            try { window.localStorage.removeItem(storageKey); } catch (_) {}
+            messages.innerHTML = "";
+            showWelcome();
+          }
+          await loadConversationList();
+          if (wasActive) await loadHistory();
+          setStatus("对话已删除。");
+        } catch (error) {
+          deleteButton.disabled = false;
+          setStatus(error.message || "删除对话失败，请稍后重试。");
+        }
+      });
+      button.append(title, preview, deleteButton);
+      const selectConversation = async () => {
         conversationId = item.conversation_id;
         try { window.localStorage.setItem(storageKey, conversationId); } catch (_) {}
         renderConversationList(items);
         await loadHistory();
+      };
+      button.addEventListener("click", selectConversation);
+      button.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectConversation(); }
       });
       historyList.appendChild(button);
     });
@@ -503,7 +548,7 @@ button:disabled { cursor:wait; opacity:.65; }
   const waitForPending = async () => {
     for (let attempt = 0; attempt < 60; attempt += 1) {
       await loadHistory();
-      if (!messages.querySelector('.chat-message.pending')) return;
+      if (!messages.querySelector('.chat-message-pending')) return;
       setStatus(`上一轮仍在生成…（已等待 ${attempt + 1} 秒）`);
       await new Promise(resolve => window.setTimeout(resolve, 1000));
     }

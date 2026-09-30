@@ -1,9 +1,10 @@
 import json
 
 from django.contrib.auth.decorators import login_required
+from django.db import transaction
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_GET, require_POST, require_http_methods
 
 from .chat import ChatError, ask_conversation, create_conversation, release_expired_pending
 from .models import PaperConversation
@@ -86,3 +87,20 @@ def conversation_messages(request, conversation_id):
                              "id", "role", "content", "structured_payload", "status", "error_code",
                              "error_message", "provider", "requested_model", "model", "created_at",
                              "started_at", "completed_at", "lease_expires_at"))})
+
+
+@login_required
+@require_http_methods(["DELETE"])
+def conversation_delete(request, conversation_id):
+    """Delete one paper chat owned by the current user, including its messages."""
+    conversation = get_object_or_404(PaperConversation, pk=conversation_id, user=request.user)
+    # Deleting the parent cascades its messages. Lock the row first so a concurrent
+    # request cannot delete a conversation after this authorization check changes.
+    with transaction.atomic():
+        locked = get_object_or_404(
+            PaperConversation.objects.select_for_update(),
+            pk=conversation.pk,
+            user=request.user,
+        )
+        locked.delete()
+    return JsonResponse({"ok": True, "conversation_id": str(conversation_id)})

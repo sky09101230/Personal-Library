@@ -6,6 +6,7 @@ import hashlib
 import uuid
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from .evidence import validate_claims
@@ -30,20 +31,27 @@ def release_expired_pending(conversation):
     """Mark an orphaned assistant turn failed so readers do not poll it forever."""
     now = timezone.now()
     with transaction.atomic():
-        locked = PaperConversation.objects.select_for_update().get(pk=conversation.pk)
-        pending = locked.messages.filter(
+        try:
+            locked = PaperConversation.objects.select_for_update().get(pk=conversation.pk)
+        except PaperConversation.DoesNotExist:
+            # A concurrent delete is an expected outcome while a reader refreshes.
+            return None
+        pending_qs = locked.messages.filter(
             role=PaperChatMessage.Role.ASSISTANT,
             status=PaperChatMessage.Status.PENDING,
-        ).first()
-        if pending is None or (pending.lease_expires_at and pending.lease_expires_at > now):
-            return pending
-        pending.status = PaperChatMessage.Status.FAILED
-        pending.error_code = "lease_expired"
-        pending.error_message = "上一轮回答已超时，请重新提问。"
-        pending.completed_at = now
-        pending.lease_expires_at = None
-        pending.save(update_fields=("status", "error_code", "error_message", "completed_at", "lease_expires_at"))
-        return None
+        )
+        # A missing lease is also orphaned. Updating the full set handles old
+        # databases that may contain more than one pending row from before the
+        # partial unique constraint was applied.
+        expired = pending_qs.filter(Q(lease_expires_at__isnull=True) | Q(lease_expires_at__lte=now))
+        expired.update(
+            status=PaperChatMessage.Status.FAILED,
+            error_code="lease_expired",
+            error_message="上一轮回答已超时，请重新提问。",
+            completed_at=now,
+            lease_expires_at=None,
+        )
+        return pending_qs.filter(status=PaperChatMessage.Status.PENDING).order_by("sequence", "pk").first()
 
 
 def create_conversation(user, document_id, *, parse_id=None, title=""):
@@ -149,6 +157,7 @@ def ask_conversation(conversation, user, question, *, request_id=None, provider=
         assistant.status = PaperChatMessage.Status.FAILED
         assistant.error_code = (getattr(exc, "code", None) or "generation_failed")[:64]
         assistant.error_message = str(exc)[:500]
+        assistant.content = assistant.error_message or "本轮回答失败，请重试。"
         assistant.completed_at = timezone.now()
         assistant.lease_expires_at = None
         assistant.save(update_fields=("status", "error_code", "error_message", "completed_at", "lease_expires_at"))

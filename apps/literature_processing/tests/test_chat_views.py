@@ -121,3 +121,40 @@ class PaperChatViewTests(TestCase):
         pending.refresh_from_db()
         self.assertEqual(pending.status, PaperChatMessage.Status.FAILED)
         self.assertEqual(payload["messages"][0]["error_code"], "lease_expired")
+
+    def test_messages_endpoint_releases_pending_turn_without_lease(self):
+        conversation = create_conversation(self.user, self.document.pk, parse_id=self.parse.pk)
+        pending = PaperChatMessage.objects.create(
+            conversation=conversation, request_id="q-no-lease", sequence=0,
+            role=PaperChatMessage.Role.ASSISTANT, content="处理中",
+            status=PaperChatMessage.Status.PENDING,
+        )
+
+        response = self.client.get(reverse("paper-chat-messages", args=[conversation.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        pending.refresh_from_db()
+        self.assertEqual(pending.status, PaperChatMessage.Status.FAILED)
+        self.assertEqual(response.json()["messages"][0]["error_code"], "lease_expired")
+
+    def test_delete_owned_conversation_cascades_messages(self):
+        conversation = create_conversation(self.user, self.document.pk, parse_id=self.parse.pk, title="待删除")
+        PaperChatMessage.objects.create(
+            conversation=conversation, request_id="q-delete", sequence=0,
+            role=PaperChatMessage.Role.USER, content="请删除这个会话",
+        )
+
+        response = self.client.delete(reverse("paper-chat-delete", args=[conversation.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"ok": True, "conversation_id": str(conversation.pk)})
+        self.assertFalse(type(conversation).objects.filter(pk=conversation.pk).exists())
+        self.assertFalse(PaperChatMessage.objects.filter(conversation_id=conversation.pk).exists())
+
+    def test_delete_other_users_conversation_is_not_found(self):
+        conversation = create_conversation(self.other, self.document.pk, parse_id=self.parse.pk)
+
+        response = self.client.delete(reverse("paper-chat-delete", args=[conversation.pk]))
+
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(type(conversation).objects.filter(pk=conversation.pk).exists())
