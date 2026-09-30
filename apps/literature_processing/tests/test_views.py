@@ -259,6 +259,13 @@ class LiteratureDetailViewTests(TestCase):
         self.assertContains(response, "batch-test")
         self.assertContains(response, "1-2")
         self.assertContains(response, "Results")
+        self.assertContains(response, 'id="paper-chat-shell"')
+        self.assertContains(response, 'id="paper-chat-messages"')
+        self.assertContains(response, 'data-messages-base=')
+        self.assertContains(response, 'data-status-url=')
+        self.assertContains(response, 'id="skeleton-generation-progress"')
+        self.assertContains(response, "正在加载对话历史")
+        self.assertContains(response, "Ctrl/⌘ + Enter")
 
     def test_latest_failure_does_not_hide_previous_successful_result(self):
         _, _, _, analysis = self.create_result("old")

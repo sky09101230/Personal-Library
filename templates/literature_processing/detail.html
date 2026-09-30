@@ -134,15 +134,23 @@
       {% else %}
         <p class="subtle">暂无结构化总览。生成会按论文结构覆盖 Introduction、Method、Results、Figures 和 Conclusion。</p>
       {% endif %}
-      {% if result_parse and paper_ai_enabled %}<button type="button" class="row-action" id="generate-skeleton" data-force="{% if skeleton %}true{% else %}false{% endif %}" data-parse="{{ result_parse.pk }}" data-url="{% url 'paper-skeleton-generate' literature.pk %}">{% if skeleton %}重新生成总览{% else %}生成 Paper Skeleton{% endif %}</button>{% endif %}
-      <p id="skeleton-generation-status" role="status" aria-live="polite"></p>
+      {% if result_parse and paper_ai_enabled %}<button type="button" class="row-action" id="generate-skeleton" data-force="{% if skeleton %}true{% else %}false{% endif %}" data-parse="{{ result_parse.pk }}" data-url="{% url 'paper-skeleton-generate' literature.pk %}" data-status-url="{% url 'paper-skeleton-status' 0 %}">{% if skeleton %}重新生成总览{% else %}生成 Paper Skeleton{% endif %}</button>{% endif %}
+      <div id="skeleton-generation-progress" class="task-progress" role="status" aria-live="polite" hidden>
+        <span class="task-spinner" aria-hidden="true"></span>
+        <span id="skeleton-generation-status">正在准备 Paper Skeleton…</span>
+        <span id="skeleton-generation-elapsed" class="task-elapsed"></span>
+        <progress id="skeleton-generation-bar" max="100" value="0" hidden></progress>
+      </div>
     </article>
     <article aria-labelledby="chat-title">
       <h3 id="chat-title">Paper Chat</h3>
-      <div id="paper-chat-messages" aria-live="polite"><p class="subtle">回答只基于当前 parse 的 Evidence。</p></div>
-      {% if result_parse %}<form id="paper-chat-form" data-create-url="{% url 'paper-chat-create' literature.pk %}" data-ask-base="{% url 'paper-chat-ask' '00000000-0000-0000-0000-000000000000' %}">
-        {% csrf_token %}<label for="paper-chat-question">问题</label><textarea id="paper-chat-question" name="question" rows="3" required></textarea><button type="submit" class="row-action primary-action">提问</button>
-      </form>{% endif %}
+      <div id="paper-chat-shell" class="chat-shell" data-storage-key="paper-chat:{{ literature.pk }}:{% if result_parse %}{{ result_parse.pk }}{% endif %}" data-messages-base="{% url 'paper-chat-messages' '00000000-0000-0000-0000-000000000000' %}" data-evidence-base="{% if result_parse %}{% url 'paper-evidence-detail' literature.pk result_parse.pk 'EVIDENCE_ID' %}{% endif %}">
+        <div id="paper-chat-messages" class="chat-messages" aria-live="polite" aria-label="对话历史"><p class="subtle chat-empty">回答只基于当前 parse 的 Evidence。发送第一个问题开始对话。</p></div>
+        <p id="paper-chat-status" class="chat-status" role="status" aria-live="polite"></p>
+        {% if result_parse %}<form id="paper-chat-form" data-create-url="{% url 'paper-chat-create' literature.pk %}" data-ask-base="{% url 'paper-chat-ask' '00000000-0000-0000-0000-000000000000' %}">
+          {% csrf_token %}<label for="paper-chat-question">问题</label><div class="chat-compose"><textarea id="paper-chat-question" name="question" rows="3" required placeholder="询问这篇论文的方法、结果或图表…"></textarea><button type="submit" class="row-action primary-action"><span class="chat-submit-label">提问</span><span class="task-spinner button-spinner" aria-hidden="true" hidden></span></button></div><small class="chat-hint">按 Ctrl/⌘ + Enter 发送；回答会保存在本机对话历史中。</small>
+        </form>{% endif %}
+      </div>
     </article>
   </div>
 </section>
@@ -167,11 +175,35 @@
 .reader-grid { display:grid; grid-template-columns:minmax(0, 3fr) minmax(280px, 2fr); gap:32px; align-items:start; }
 .reader-grid article { min-width:0; }
 #paper-chat-form { display:grid; gap:12px; }
-#paper-chat-question { width:100%; box-sizing:border-box; min-height:120px; padding:12px; border:1px solid #bcd2c7; border-radius:6px; font:inherit; }
+#paper-chat-question { width:100%; box-sizing:border-box; min-height:92px; padding:12px; border:1px solid #bcd2c7; border-radius:6px; font:inherit; resize:vertical; }
 #paper-chat-form button { justify-self:start; }
+.chat-shell { display:grid; gap:12px; }
+.chat-messages { display:flex; flex-direction:column; gap:12px; min-height:180px; max-height:520px; overflow-y:auto; padding:12px; background:#f6faf8; border:1px solid #dde7e2; border-radius:8px; scroll-behavior:smooth; }
+.chat-empty { margin:auto; text-align:center; }
+.chat-message { display:flex; flex-direction:column; gap:5px; max-width:88%; padding:10px 12px; border-radius:10px; line-height:1.55; white-space:pre-wrap; overflow-wrap:anywhere; }
+.chat-message-user { align-self:flex-end; background:#195440; color:#fff; border-bottom-right-radius:3px; }
+.chat-message-assistant { align-self:flex-start; background:#fff; border:1px solid #d7e5dd; border-bottom-left-radius:3px; }
+.chat-message-pending { opacity:.72; }
+.chat-message-failed { border-color:#c65c5c; background:#fff5f5; }
+.chat-message-meta { display:flex; justify-content:space-between; gap:12px; font-size:.76rem; opacity:.72; }
+.chat-message-body { white-space:pre-wrap; }
+.chat-evidence-links { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; font-size:.82rem; }
+.chat-evidence-links a { color:inherit; text-decoration:underline; }
+.chat-status { min-height:1.3em; margin:0; color:#607d70; }
+.chat-compose { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:end; }
+.chat-compose button { min-width:72px; min-height:42px; display:inline-flex; align-items:center; justify-content:center; gap:6px; }
+.chat-hint { color:#607d70; }
+.task-progress { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:10px; color:#356b58; }
+.task-progress progress { flex-basis:100%; width:100%; height:8px; accent-color:#195440; }
+.task-spinner { display:inline-block; width:14px; height:14px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:task-spin .8s linear infinite; }
+.button-spinner { width:12px; height:12px; }
+.task-elapsed { font-size:.85em; opacity:.75; }
+@keyframes task-spin { to { transform:rotate(360deg); } }
+button:disabled { cursor:wait; opacity:.65; }
 .skeleton-section { padding:8px 0; border-bottom:1px solid #dde7e2; }
 .reader-notice { padding:16px; background:#fff5db; border-radius:6px; }
 @media(max-width:800px) { .reader-grid { grid-template-columns:1fr; } }
+@media(max-width:520px) { .chat-compose { grid-template-columns:1fr; } .chat-compose button { justify-self:end; } }
 </style>
 <script>
 (() => {
@@ -259,42 +291,200 @@
 <script>
 (() => {
   const skeleton = document.getElementById("generate-skeleton");
-  if (skeleton) skeleton.addEventListener("click", async () => {
-    skeleton.disabled = true;
-    const status = document.getElementById("skeleton-generation-status");
-    status.textContent = "正在按全文结构生成总览，请稍候…";
+  const skeletonProgress = document.getElementById("skeleton-generation-progress");
+  const skeletonStatus = document.getElementById("skeleton-generation-status");
+  const skeletonElapsed = document.getElementById("skeleton-generation-elapsed");
+  const skeletonBar = document.getElementById("skeleton-generation-bar");
+  let skeletonTimer = null;
+  let skeletonPollTimer = null;
+  const csrfToken = document.querySelector("[name=csrfmiddlewaretoken]")?.value || "";
+  const randomId = () => window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const setSkeletonProgress = (visible, text = "") => {
+    if (!skeletonProgress) return;
+    skeletonProgress.hidden = !visible;
+    if (text) skeletonStatus.textContent = text;
+  };
+  const stopSkeletonTimers = () => {
+    if (skeletonTimer) window.clearInterval(skeletonTimer);
+    if (skeletonPollTimer) window.clearTimeout(skeletonPollTimer);
+    skeletonTimer = skeletonPollTimer = null;
+  };
+  const pollSkeleton = async (runId, startedAt) => {
+    const url = skeleton.dataset.statusUrl.replace(/\/0\/?$/, `/${runId}/`);
     try {
-      const response = await fetch(skeleton.dataset.url, {method: "POST", credentials: "same-origin", headers: {"X-CSRFToken": document.querySelector("[name=csrfmiddlewaretoken]")?.value || "", "Content-Type": "application/json"}, body: JSON.stringify({force: skeleton.dataset.force === "true", parse_id: Number(skeleton.dataset.parse)})});
+      const response = await fetch(url, {credentials: "same-origin", cache: "no-store"});
       const result = await response.json();
-      if (!response.ok || !result.ok) throw new Error(result.message || "生成失败，请稍后重试。");
+      if (result.status === "succeeded") {
+        stopSkeletonTimers();
+        window.location.hash = "intelligence";
+        window.location.reload();
+        return;
+      }
+      if (result.status === "failed") throw new Error(result.error_message || "总览生成失败，请稍后重试。");
+      skeletonStatus.textContent = "模型正在生成并校验证据，请稍候…";
+      skeletonPollTimer = window.setTimeout(() => pollSkeleton(runId, startedAt), 1800);
+    } catch (error) {
+      stopSkeletonTimers();
+      skeletonStatus.textContent = error.message || "无法读取总览生成状态。";
+      skeleton.disabled = false;
+    }
+  };
+  if (skeleton) skeleton.addEventListener("click", async () => {
+    if (skeleton.disabled) return;
+    skeleton.disabled = true;
+    setSkeletonProgress(true, "正在准备全文证据…");
+    skeletonBar.hidden = false;
+    skeletonBar.removeAttribute("value");
+    const startedAt = Date.now();
+    const stages = ["正在准备全文证据…", "正在按章节分析 Introduction、Method 和 Results…", "正在分析 Figures 并核对引用…", "正在校验总览结构，请稍候…"];
+    let stageIndex = 0;
+    skeletonTimer = window.setInterval(() => {
+      stageIndex = Math.min(stageIndex + 1, stages.length - 1);
+      skeletonStatus.textContent = stages[stageIndex];
+      skeletonElapsed.textContent = `已用时 ${Math.round((Date.now() - startedAt) / 1000)} 秒`;
+    }, 4500);
+    try {
+      const response = await fetch(skeleton.dataset.url, {method: "POST", credentials: "same-origin", headers: {"X-CSRFToken": csrfToken, "Content-Type": "application/json"}, body: JSON.stringify({force: skeleton.dataset.force === "true", parse_id: Number(skeleton.dataset.parse), request_id: randomId()})});
+      const result = await response.json().catch(() => ({}));
+      if ((result.status === "pending" || result.status === "running") && result.run_id) {
+        skeletonStatus.textContent = "任务已提交，正在等待模型返回…";
+        pollSkeleton(result.run_id, startedAt);
+        return;
+      }
+      if (!response.ok || !result.ok) throw new Error(result.message || "总览生成失败，请检查模型接口后重试。");
+      stopSkeletonTimers();
+      skeletonStatus.textContent = "总览生成完成，正在刷新页面…";
       window.location.hash = "intelligence";
       window.location.reload();
     } catch (error) {
-      status.textContent = error.message || "网络连接失败，请重试。";
-    } finally { skeleton.disabled = false; }
+      stopSkeletonTimers();
+      skeletonStatus.textContent = error.message || "模型接口连接失败，请稍后重试。";
+      skeletonElapsed.textContent = "";
+      skeleton.disabled = false;
+    }
   });
+
   const form = document.getElementById("paper-chat-form");
   if (!form) return;
-  let conversationId = null;
+  const shell = document.getElementById("paper-chat-shell");
   const messages = document.getElementById("paper-chat-messages");
+  const chatStatus = document.getElementById("paper-chat-status");
+  const questionInput = document.getElementById("paper-chat-question");
+  const submitButton = form.querySelector("button[type=submit]");
+  const submitLabel = form.querySelector(".chat-submit-label");
+  const submitSpinner = form.querySelector(".button-spinner");
+  const storageKey = shell?.dataset.storageKey || "paper-chat:unknown";
+  let conversationId = null;
+  try { conversationId = window.localStorage.getItem(storageKey) || null; } catch (_) { conversationId = null; }
+  const setStatus = (text = "") => { if (chatStatus) chatStatus.textContent = text; };
+  const scrollMessages = () => { messages.scrollTop = messages.scrollHeight; };
+  const clearEmpty = () => messages.querySelectorAll(".chat-empty").forEach(item => item.remove());
+  const evidenceUrl = (evidenceId) => (shell?.dataset.evidenceBase || "").replace("EVIDENCE_ID", encodeURIComponent(String(evidenceId)));
+  const formatTime = (value) => {
+    if (!value) return "";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "" : date.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  };
+  const renderMessage = (message, {pending = false} = {}) => {
+    clearEmpty();
+    const article = document.createElement("article");
+    const role = message.role === "user" ? "user" : "assistant";
+    article.className = `chat-message chat-message-${role}`;
+    if (pending || message.status === "pending") article.classList.add("chat-message-pending");
+    if (message.status === "failed") article.classList.add("chat-message-failed");
+    article.dataset.messageId = message.id || "pending";
+    const meta = document.createElement("div");
+    meta.className = "chat-message-meta";
+    meta.innerHTML = `<span>${role === "user" ? "你" : "Paper Chat"}</span><time>${formatTime(message.created_at)}</time>`;
+    article.appendChild(meta);
+    const body = document.createElement("div");
+    body.className = "chat-message-body";
+    body.textContent = pending ? "正在检索证据并生成回答…" : (message.content || message.error_message || "无法回答。");
+    article.appendChild(body);
+    if (!pending && role === "assistant" && message.structured_payload?.claims?.length) {
+      const links = document.createElement("div");
+      links.className = "chat-evidence-links";
+      message.structured_payload.claims.forEach((claim) => (claim.evidence_ids || []).forEach((id) => {
+        const href = evidenceUrl(id);
+        if (!href) return;
+        const link = document.createElement("a");
+        link.href = href;
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.textContent = `查看证据 ${id}`;
+        links.appendChild(link);
+      }));
+      if (links.childElementCount) article.appendChild(links);
+    }
+    messages.appendChild(article);
+    scrollMessages();
+    return article;
+  };
+  const showWelcome = () => {
+    if (!messages.childElementCount) messages.innerHTML = '<p class="subtle chat-empty">回答只基于当前 parse 的 Evidence。发送第一个问题开始对话。</p>';
+  };
+  const loadHistory = async () => {
+    if (!conversationId) { showWelcome(); return; }
+    messages.innerHTML = '<p class="subtle chat-empty">正在加载对话历史…</p>';
+    const url = shell.dataset.messagesBase.replace("00000000-0000-0000-0000-000000000000", conversationId);
+    try {
+      const response = await fetch(url, {credentials: "same-origin", cache: "no-store"});
+      if (!response.ok) throw new Error("history_unavailable");
+      const payload = await response.json();
+      messages.innerHTML = "";
+      (payload.messages || []).forEach(message => renderMessage(message));
+      showWelcome();
+      setStatus(payload.messages?.length ? "已加载本地对话历史。" : "");
+    } catch (_) {
+      conversationId = null;
+      try { window.localStorage.removeItem(storageKey); } catch (_) {}
+      messages.innerHTML = "";
+      showWelcome();
+    }
+  };
+  const createConversation = async () => {
+    const response = await fetch(form.dataset.createUrl, {method: "POST", credentials: "same-origin", headers: {"X-CSRFToken": csrfToken, "Content-Type": "application/json"}, body: JSON.stringify({parse_id: Number(shell.dataset.storageKey.split(":").pop())})});
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.conversation_id) throw new Error(payload.message || "无法创建会话。");
+    conversationId = payload.conversation_id;
+    try { window.localStorage.setItem(storageKey, conversationId); } catch (_) {}
+    return conversationId;
+  };
+  const setChatBusy = (busy) => {
+    questionInput.disabled = busy;
+    submitButton.disabled = busy;
+    submitLabel.hidden = busy;
+    submitSpinner.hidden = !busy;
+  };
+  questionInput.addEventListener("keydown", event => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); form.requestSubmit(); }
+  });
+  const historyReady = loadHistory();
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const question = document.getElementById("paper-chat-question").value.trim();
+    const question = questionInput.value.trim();
     if (!question) return;
-    const csrf = form.querySelector("[name=csrfmiddlewaretoken]").value;
-    if (!conversationId) {
-      const created = await fetch(form.dataset.createUrl, {method: "POST", credentials: "same-origin", headers: {"X-CSRFToken": csrf, "Content-Type": "application/json"}, body: JSON.stringify({})});
-      if (!created.ok) { messages.textContent = "无法创建会话。"; return; }
-      conversationId = (await created.json()).conversation_id;
-    }
-    const askUrl = form.dataset.askBase.replace("00000000-0000-0000-0000-000000000000", conversationId);
-    const response = await fetch(askUrl, {method: "POST", credentials: "same-origin", headers: {"X-CSRFToken": csrf, "Content-Type": "application/json"}, body: JSON.stringify({question, request_id: crypto.randomUUID()})});
-    const payload = await response.json();
-    const article = document.createElement("article");
-    article.className = "parsed-chunk";
-    article.textContent = payload.answer || payload.message || "无法回答。";
-    messages.appendChild(article);
-    if (response.ok) document.getElementById("paper-chat-question").value = "";
+    setChatBusy(true);
+    setStatus("正在检索当前论文 Evidence…");
+    clearEmpty();
+    renderMessage({role: "user", content: question, created_at: new Date().toISOString()});
+    const pending = renderMessage({role: "assistant", content: "", created_at: new Date().toISOString(), status: "pending"}, {pending: true});
+    try {
+      await historyReady;
+      if (!conversationId) await createConversation();
+      const askUrl = form.dataset.askBase.replace("00000000-0000-0000-0000-000000000000", conversationId);
+      const response = await fetch(askUrl, {method: "POST", credentials: "same-origin", headers: {"X-CSRFToken": csrfToken, "Content-Type": "application/json"}, body: JSON.stringify({question, request_id: randomId()})});
+      const payload = await response.json().catch(() => ({}));
+      pending.remove();
+      if (!response.ok || !payload.ok) throw new Error(payload.message || (response.status === 409 ? "上一轮回答仍在生成，请稍候。" : "无法回答，请稍后重试。"));
+      renderMessage({role: "assistant", content: payload.answer, structured_payload: payload.payload, status: payload.status, created_at: new Date().toISOString(), id: payload.message_id});
+      questionInput.value = "";
+      setStatus("回答完成；引用链接已附在回答下方。");
+    } catch (error) {
+      pending.remove();
+      renderMessage({role: "assistant", content: error.message || "网络连接失败，请稍后重试。", status: "failed", created_at: new Date().toISOString()});
+      setStatus("本轮回答失败，可以修改问题后重试。");
+    } finally { setChatBusy(false); questionInput.focus(); }
   });
 })();
 </script>
