@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 SKELETON_SCHEMA_VERSION = "personal.paper-skeleton.v1"
-SKELETON_PROMPT_VERSION = "paper-skeleton-v2"
+SKELETON_PROMPT_VERSION = "paper-skeleton-v3"
 SECTION_KEYS = ("introduction", "motivation", "gap", "proposed_idea", "method", "experiments", "results", "conclusion")
 SKELETON_FALLBACK_CONTEXT_BYTES = 18000
 
@@ -36,14 +36,14 @@ class SkeletonError(RuntimeError):
 def generate_skeleton(document_parse, user, *, provider=None, force=False, request_id=None, catalog=None):
     from .evidence import build_catalog
     profile = {}
-    max_tokens = 2048
+    max_tokens = 2560
     using_default_provider = provider is None or provider is complete
     if provider is None or provider is complete:
         try:
             timeout = int(os.environ.get("PAPER_SKELETON_TIMEOUT", "180"))
             if not 1 <= timeout <= 300:
                 raise ValueError
-            max_tokens = int(os.environ.get("PAPER_SKELETON_MAX_TOKENS", "2048"))
+            max_tokens = int(os.environ.get("PAPER_SKELETON_MAX_TOKENS", "2560"))
             if not 512 <= max_tokens <= 4096:
                 raise ValueError
             config = replace(load_config(), timeout=timeout, max_retries=0)

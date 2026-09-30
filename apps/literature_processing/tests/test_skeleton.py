@@ -110,7 +110,7 @@ class SkeletonTests(TestCase):
         self.assertEqual(run.status, 'succeeded')
         self.assertEqual(complete.call_args.kwargs['config'].timeout, 180)
         self.assertEqual(complete.call_args.kwargs['config'].max_retries, 0)
-        self.assertEqual(complete.call_args.kwargs['max_tokens'], 2048)
+        self.assertEqual(complete.call_args.kwargs['max_tokens'], 2560)
         self.assertEqual(config.return_value.timeout, 30)
 
     @patch('apps.literature_processing.skeleton.load_config')
