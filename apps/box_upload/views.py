@@ -5,8 +5,8 @@ import re
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core import signing
-from django.core.exceptions import PermissionDenied
-from django.db.models import Prefetch, Q
+from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
+from django.db.models import Prefetch, Q, prefetch_related_objects
 from django.http import Http404, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.core.paginator import Paginator
 from django.shortcuts import get_object_or_404, redirect, render
@@ -123,6 +123,31 @@ def _canonical_has_primary_pdf(canonical):
     ).exists()
 
 
+def _set_overview_topics(literatures):
+    """Display topics from the same parse/Overview selected by the detail page."""
+    literatures = list(literatures)
+    prefetch_related_objects(literatures, "uploads__processing_jobs__document_parse__analyses")
+    for literature in literatures:
+        candidates = []
+        for upload in literature.uploads.all():
+            if upload.status != UploadedDocument.Status.UPLOADED or upload.file_role != UploadedDocument.FileRole.PRIMARY:
+                continue
+            for job in upload.processing_jobs.all():
+                try:
+                    document_parse = job.document_parse
+                except ObjectDoesNotExist:
+                    continue
+                candidates.append((job, document_parse))
+        succeeded = [pair for pair in candidates if pair[0].status == "succeeded"]
+        selected = max(succeeded or candidates, key=lambda pair: (pair[0].created_at, pair[0].pk), default=None)
+        literature.overview_topics = []
+        if selected:
+            overview = next((analysis for analysis in selected[1].analyses.all() if analysis.analysis_type == "overview"), None)
+            topics = overview.payload.get("topics", []) if overview and isinstance(overview.payload, dict) else []
+            if isinstance(topics, list):
+                literature.overview_topics = list(dict.fromkeys(topic.strip() for topic in topics if isinstance(topic, str) and topic.strip()))
+
+
 def _batch_result(filename, state, notice):
     return {"filename": filename, "state": state, "notice": notice}
 
@@ -142,6 +167,7 @@ def home(request):
         _set_visible_uploads(literature)
         literature.latest_metadata_proposal = next(iter(literature.metadata_proposals.all()), None)
         literature.can_review_ai_metadata = can_review_document(request.user, literature)
+    _set_overview_topics(recent_literature)
     return render(request, "box_upload/home.html", {
         "record_count": records.count(),
         "canonical_count": CanonicalDocument.objects.count(),
@@ -455,6 +481,7 @@ def library(request, uploader=None):
             | Q(journal__icontains=query)
         ).distinct()
     page = Paginator(records, 20).get_page(request.GET.get("page"))
+    _set_overview_topics(page.object_list)
     for literature in page.object_list:
         _set_visible_uploads(literature)
         literature.latest_metadata_proposal = next(iter(literature.metadata_proposals.all()), None)

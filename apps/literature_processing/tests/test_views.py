@@ -311,3 +311,30 @@ class LiteratureDetailViewTests(TestCase):
 
         self.assertContains(response, f'href="{self.url}"')
         self.assertContains(response, "Traceable literature detail")
+
+    def test_library_uses_overview_topics_and_expands_remaining_labels(self):
+        _, _, _, overview = self.create_result()
+        topics = ["Polarization multiplexing", "Optical neural networks", "Metasurfaces", "Imaging and classification", "Optical intelligence"]
+        overview.payload["topics"] = topics
+        overview.payload["chinese_translation"]["topics"] = ["主题一", "主题二", "主题三", "主题四", "主题五"]
+        overview.save()
+        self.literature.ai_tags = ["metadata-tag-must-not-appear"]
+        self.literature.save()
+        # A newer failed processing job must not hide the usable Overview topics.
+        self.create_job(status="failed", stage="overview", suffix="new-failed")
+        self.client.force_login(self.user)
+        for url in (reverse("library"), reverse("upload-history"), reverse("home")):
+            response = self.client.get(url)
+            self.assertContains(response, "展开全部（5）")
+            for topic in topics:
+                self.assertContains(response, topic, count=1)
+            self.assertNotContains(response, "metadata-tag-must-not-appear")
+
+    def test_document_info_is_first_tab_and_default_panel(self):
+        self.client.force_login(self.user)
+        response = self.client.get(self.url)
+        html = response.content.decode()
+        self.assertLess(html.index('id="tab-overview"'), html.index('id="tab-intelligence"'))
+        self.assertContains(response, 'aria-controls="paper-overview" aria-selected="true"')
+        self.assertContains(response, "hash : 'paper-overview'")
+        self.assertContains(response, "hash.startsWith('chunk-') ? 'parsed-content'")

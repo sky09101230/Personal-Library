@@ -434,7 +434,7 @@ class UploadPageTests(TestCase):
             identifiers={"doi": "10.1000/complete", "pmid": "123456"},
             user_tags=["user-tag"],
             source_tags=["source-tag"],
-            ai_tags=["ai-tag"],
+            ai_tags=["metadata-only-ai-tag"],
             metadata_source="crossref",
             metadata_status=CanonicalDocument.MetadataStatus.VERIFIED,
             metadata_confidence=1,
@@ -452,11 +452,11 @@ class UploadPageTests(TestCase):
 
         response = self.client.get("/library/")
 
-        for heading in ("标题", "作者", "期刊与年份", "状态", "文献操作", "PDF 附件"):
+        for heading in ("标题", "作者", "期刊与年份", "AI 标签", "文献操作", "PDF 附件"):
             self.assertContains(response, heading)
-        for value in ("Complete metadata paper", "Author Four", "10.1000/complete", "https://doi.org/10.1000/complete", "Complete Journal", "2026", "在线打开", "下载", "ai-tag", "文献详情"):
+        for value in ("Complete metadata paper", "Author Four", "10.1000/complete", "https://doi.org/10.1000/complete", "Complete Journal", "2026", "在线打开", "下载", "暂无 AI 标签", "文献详情"):
             self.assertContains(response, value)
-        for removed in ("Complete abstract text.", "user-tag", "source-tag", "complete.pdf", "/complete.pdf", "123456", "查看完整证据", "外部引用"):
+        for removed in ("Complete abstract text.", "user-tag", "source-tag", "metadata-only-ai-tag", "complete.pdf", "/complete.pdf", "123456", "查看完整证据", "外部引用"):
             self.assertNotContains(response, removed)
         self.assertContains(response, "元数据需处理")
         self.assertContains(response, "不完整、待复核或冲突")
@@ -466,7 +466,7 @@ class UploadPageTests(TestCase):
         self.assertContains(response, "PDF 上传成功后会立即向 Agent 发布")
         html = response.content.decode()
         self.assertNotIn(">摘要</th>", html)
-        self.assertLess(html.index(">状态</th>"), html.index(">文献操作</th>"))
+        self.assertLess(html.index(">AI 标签</th>"), html.index(">文献操作</th>"))
         self.assertLess(html.index(">文献操作</th>"), html.index(">PDF 附件</th>"))
 
     def test_library_workflow_filters_and_staff_action_link(self):

@@ -6,7 +6,7 @@
         <th class="authors-column">作者</th>
         <th class="source-column">期刊与年份</th>
         {% if show_abstract %}<th class="abstract-column">摘要</th>{% endif %}
-        <th class="status-column">状态</th>
+        <th class="status-column">AI 标签</th>
         <th class="document-actions-column">文献操作</th>
         <th class="attachment-actions-column">PDF 附件</th>
       </tr>
@@ -29,9 +29,9 @@
         </td>{% endif %}
         <td class="status-column">
           <div class="ai-tags-cell">
-            {% if literature.ai_tags %}
-              {% for tag in literature.ai_tags|slice:":3" %}<span class="tag ai-tag">{{ tag }}</span>{% endfor %}
-              {% if literature.ai_tags|length > 3 %}<details class="ai-tags-more"><summary>展开全部（{{ literature.ai_tags|length }}）</summary><div>{% for tag in literature.ai_tags %}<span class="tag ai-tag">{{ tag }}</span>{% endfor %}</div></details>{% endif %}
+            {% if literature.overview_topics %}
+              {% for tag in literature.overview_topics|slice:":3" %}<span class="tag ai-tag">{{ tag }}</span>{% endfor %}
+              {% if literature.overview_topics|length > 3 %}<details class="ai-tags-more"><summary>展开全部（{{ literature.overview_topics|length }}）</summary><div>{% for tag in literature.overview_topics|slice:"3:" %}<span class="tag ai-tag">{{ tag }}</span>{% endfor %}</div></details>{% endif %}
             {% else %}<span class="subtle">暂无 AI 标签</span>{% endif %}
           </div>
         </td>

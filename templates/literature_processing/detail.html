@@ -11,8 +11,8 @@
   </div>
 </header>
 <nav class="reader-tabs" aria-label="文献阅读分区" role="tablist">
-  <a id="tab-intelligence" href="#intelligence" role="tab" aria-controls="intelligence" aria-selected="true">Paper Intelligence · 智能阅读</a>
-  <a id="tab-overview" href="#paper-overview" role="tab" aria-controls="paper-overview" aria-selected="false">文献信息 / AI Overview</a>
+  <a id="tab-overview" href="#paper-overview" role="tab" aria-controls="paper-overview" aria-selected="true">文献信息 / AI Overview</a>
+  <a id="tab-intelligence" href="#intelligence" role="tab" aria-controls="intelligence" aria-selected="false">Paper Intelligence · 智能阅读</a>
   <a id="tab-parsed" href="#parsed-content" role="tab" aria-controls="parsed-content" aria-selected="false">Parsed Content · 原文片段</a>
 </nav>
 <div id="paper-overview" class="reader-panel" role="tabpanel" aria-labelledby="tab-overview">
@@ -227,7 +227,7 @@ button:disabled { cursor:wait; opacity:.65; }
   const panels = Array.from(document.querySelectorAll('.reader-panel'));
   function showFromHash() {
     const hash = window.location.hash.slice(1);
-    const target = hash.startsWith('chunk-') ? 'parsed-content' : (panels.some(p => p.id === hash) ? hash : 'intelligence');
+    const target = hash.startsWith('chunk-') ? 'parsed-content' : (panels.some(p => p.id === hash) ? hash : 'paper-overview');
     panels.forEach(panel => { panel.hidden = panel.id !== target; });
     tabs.forEach(tab => { const active = tab.getAttribute('aria-controls') === target; tab.setAttribute('aria-selected', String(active)); tab.tabIndex = active ? 0 : -1; });
     if (hash.startsWith('chunk-')) { const chunk = document.getElementById(hash); if (chunk) { chunk.closest('details').open = true; chunk.scrollIntoView(); } }
