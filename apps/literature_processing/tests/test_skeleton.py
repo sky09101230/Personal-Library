@@ -77,9 +77,10 @@ class SkeletonTests(TestCase):
         invalid = self.payload()
         invalid['sections']['method']['claims'][0]['evidence_ids'] = ['not-in-packet']
         provider.return_value.content = json.dumps(invalid)
-        with self.assertRaises(SkeletonError):
-            generate_skeleton(self.parse, self.user, provider=provider, catalog=self.catalog, force=True)
-        self.assertEqual(self.parse.analyses.count(), 2)
+        degraded = generate_skeleton(self.parse, self.user, provider=provider, catalog=self.catalog, force=True)
+        self.assertEqual(degraded.status, 'succeeded')
+        self.assertEqual(degraded.provider, 'evidence-fallback')
+        self.assertEqual(self.parse.analyses.count(), 3)
 
     def test_reader_tabs_and_empty_legacy_result_regenerate(self):
         from ..models import DocumentAnalysis

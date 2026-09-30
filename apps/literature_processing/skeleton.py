@@ -147,6 +147,50 @@ def generate_skeleton(document_parse, user, *, provider=None, force=False, reque
         run.lease_expires_at = None
         run.save()
         return run
+    except (LLMError, ValidationError) as exc:
+        # Keep the reader usable when a local compatible model returns malformed
+        # JSON or times out. The fallback contains only source excerpts and real
+        # Evidence IDs; it never invents a scientific conclusion.
+        try:
+            payload = _evidence_fallback_payload(context)
+            validate_skeleton_payload(payload)
+            allowed = context.get("allowed_evidence_ids", [])
+            for section in payload["sections"].values():
+                validate_claims(catalog, section["claims"], allowed)
+            for figure in payload["figures"]:
+                validate_claims(catalog, figure["claims"], allowed)
+            analysis = DocumentAnalysis.objects.create(
+                document_parse=document_parse, analysis_type=DocumentAnalysis.AnalysisType.PAPER_SKELETON,
+                schema_version=SKELETON_SCHEMA_VERSION, provider="evidence-fallback",
+                model="source-excerpt", prompt_version=SKELETON_PROMPT_VERSION,
+                input_fingerprint=hashlib.sha256(json.dumps({"context": context, "fallback": True, "nonce": run.generation_nonce}, sort_keys=True, ensure_ascii=False).encode()).hexdigest(),
+                payload=payload,
+            )
+            run.result = analysis
+            run.status = PaperAnalysisRun.Status.SUCCEEDED
+            run.provider = "evidence-fallback"
+            run.model = "source-excerpt"
+            run.prompt_version = SKELETON_PROMPT_VERSION
+            run.schema_version = SKELETON_SCHEMA_VERSION
+            run.error_code = "degraded"
+            run.error_message = "模型输出不可用，已展示原文证据大纲。"
+            run.completed_at = timezone.now()
+            run.lease_expires_at = None
+            run.save()
+            logger.warning("Paper Skeleton run %s degraded to evidence fallback after %s", run.pk, type(exc).__name__)
+            return run
+        except Exception:
+            pass
+        # Fall through to the normal failed state when even the source fallback
+        # cannot be validated.
+        run.error_code = "invalid_output" if isinstance(exc, ValidationError) else (getattr(exc, "code", None) or "generation_failed")[:64]
+        run.error_message = "总览生成失败，请稍后重试。"
+        run.status = PaperAnalysisRun.Status.FAILED
+        run.completed_at = timezone.now()
+        run.lease_expires_at = None
+        run.save(update_fields=("status", "error_code", "error_message", "completed_at", "lease_expires_at"))
+        logger.warning("Paper Skeleton run %s failed: %s (%s)", run.pk, run.error_code, type(exc).__name__)
+        raise SkeletonError(run.error_code, run.error_message) from None
     except Exception as exc:
         run.status = PaperAnalysisRun.Status.FAILED
         if getattr(exc, "code", None):
@@ -227,6 +271,25 @@ def has_supported_claims(payload):
                    isinstance(claim, dict) and bool(claim.get("text")) and bool(claim.get("evidence_ids"))
                    for claim in section["claims"])
                for section in payload["sections"].values())
+
+
+def _evidence_fallback_payload(context):
+    items = [item for item in context.get("items", []) if item.get("evidence_id") and item.get("text")]
+    sections = {}
+    for index, key in enumerate(SECTION_KEYS):
+        item = items[min(index, len(items) - 1)] if items else None
+        claim = ({"text": "原文证据摘录：" + item["text"][:500], "evidence_ids": [item["evidence_id"]], "kind": "finding"}
+                 if item else None)
+        sections[key] = {"status": "supported" if claim else "insufficient_evidence", "claims": [claim] if claim else []}
+    figures = []
+    for item in items:
+        if item.get("kind") == "figure":
+            figures.append({"evidence_id": item["evidence_id"], "status": "supported",
+                            "claims": [{"text": "该 Figure 的原文证据已纳入本条目；模型图像解释不可用。",
+                                         "evidence_ids": [item["evidence_id"]], "kind": "limitation"}]})
+    return {"language": "zh-CN", "sections": sections, "figures": figures,
+            "limitations": [], "coverage": {**(context.get("coverage") or {}), "degraded": True,
+                                               "reason": "model_output_unavailable"}}
 
 
 def _prompt():
