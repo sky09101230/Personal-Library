@@ -310,14 +310,40 @@ button:disabled { cursor:wait; opacity:.65; }
   const skeletonStatus = document.getElementById("skeleton-generation-status");
   const skeletonElapsed = document.getElementById("skeleton-generation-elapsed");
   const skeletonBar = document.getElementById("skeleton-generation-bar");
+  const skeletonSpinner = skeletonProgress?.querySelector(".task-spinner");
   let skeletonTimer = null;
   let skeletonPollTimer = null;
   const csrfToken = document.querySelector("[name=csrfmiddlewaretoken]")?.value || "";
   const randomId = () => window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const fetchWithTimeout = async (url, options = {}, timeoutMs = 20000) => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, {...options, signal: controller.signal});
+    } finally {
+      window.clearTimeout(timer);
+    }
+  };
   const setSkeletonProgress = (visible, text = "") => {
     if (!skeletonProgress) return;
     skeletonProgress.hidden = !visible;
+    if (skeletonSpinner) skeletonSpinner.hidden = !visible;
     if (text) skeletonStatus.textContent = text;
+  };
+  // A completed result can be rendered from a fresh request while an older
+  // page instance is still around (for example after a browser back/forward
+  // restore). Never leave the old spinner visible once the result is present.
+  const hasRenderedSkeleton = Boolean(document.querySelector(".skeleton-sections, .reader-notice"));
+  if (hasRenderedSkeleton) setSkeletonProgress(false);
+  const finishSkeletonProgress = (message = "", {hide = true} = {}) => {
+    stopSkeletonTimers();
+    setSkeletonProgress(!hide, message);
+    if (!hide && skeletonSpinner) skeletonSpinner.hidden = true;
+    if (skeletonElapsed) skeletonElapsed.textContent = "";
+    if (skeletonBar) {
+      skeletonBar.hidden = true;
+      skeletonBar.removeAttribute("value");
+    }
   };
   const stopSkeletonTimers = () => {
     if (skeletonTimer) window.clearInterval(skeletonTimer);
@@ -330,7 +356,7 @@ button:disabled { cursor:wait; opacity:.65; }
       const response = await fetch(url, {credentials: "same-origin", cache: "no-store"});
       const result = await response.json();
       if (result.status === "succeeded") {
-        stopSkeletonTimers();
+        finishSkeletonProgress("总览生成完成。");
         window.location.hash = "intelligence";
         window.location.reload();
         return;
@@ -339,7 +365,7 @@ button:disabled { cursor:wait; opacity:.65; }
       skeletonStatus.textContent = "模型正在生成并校验证据，请稍候…";
       skeletonPollTimer = window.setTimeout(() => pollSkeleton(runId, startedAt), 1800);
     } catch (error) {
-      stopSkeletonTimers();
+      finishSkeletonProgress(error.message || "无法读取总览生成状态。", {hide: false});
       skeletonStatus.textContent = error.message || "无法读取总览生成状态。";
       skeleton.disabled = false;
     }
@@ -358,8 +384,10 @@ button:disabled { cursor:wait; opacity:.65; }
       skeletonStatus.textContent = stages[stageIndex];
       skeletonElapsed.textContent = `已用时 ${Math.round((Date.now() - startedAt) / 1000)} 秒`;
     }, 4500);
+    const controller = new AbortController();
+    const requestTimeout = window.setTimeout(() => controller.abort(), 210000);
     try {
-      const response = await fetch(skeleton.dataset.url, {method: "POST", credentials: "same-origin", headers: {"X-CSRFToken": csrfToken, "Content-Type": "application/json"}, body: JSON.stringify({force: skeleton.dataset.force === "true", parse_id: Number(skeleton.dataset.parse), request_id: randomId()})});
+      const response = await fetch(skeleton.dataset.url, {method: "POST", signal: controller.signal, credentials: "same-origin", headers: {"X-CSRFToken": csrfToken, "Content-Type": "application/json"}, body: JSON.stringify({force: skeleton.dataset.force === "true", parse_id: Number(skeleton.dataset.parse), request_id: randomId()})});
       const result = await response.json().catch(() => ({}));
       if ((result.status === "pending" || result.status === "running") && result.run_id) {
         skeletonStatus.textContent = "任务已提交，正在等待模型返回…";
@@ -367,16 +395,16 @@ button:disabled { cursor:wait; opacity:.65; }
         return;
       }
       if (!response.ok || !result.ok) throw new Error(result.message || "总览生成失败，请检查模型接口后重试。");
-      stopSkeletonTimers();
+      finishSkeletonProgress("总览生成完成，正在刷新页面…");
       skeletonStatus.textContent = "总览生成完成，正在刷新页面…";
       window.location.hash = "intelligence";
       window.location.reload();
     } catch (error) {
-      stopSkeletonTimers();
+      finishSkeletonProgress(error.message || "模型接口连接失败，请稍后重试。", {hide: false});
       skeletonStatus.textContent = error.message || "模型接口连接失败，请稍后重试。";
       skeletonElapsed.textContent = "";
       skeleton.disabled = false;
-    }
+    } finally { window.clearTimeout(requestTimeout); }
   });
 
   const form = document.getElementById("paper-chat-form");
@@ -393,10 +421,26 @@ button:disabled { cursor:wait; opacity:.65; }
   const storageKey = shell?.dataset.storageKey || "paper-chat:unknown";
   let conversationId = null;
   let chatElapsedTimer = null;
+  let chatBusy = false;
+  let historyRequestToken = 0;
+  let conversationListRequestToken = 0;
+  let pendingRefreshTimer = null;
   try { conversationId = window.localStorage.getItem(storageKey) || null; } catch (_) { conversationId = null; }
   const setStatus = (text = "") => { if (chatStatus) chatStatus.textContent = text; };
   const scrollMessages = () => { messages.scrollTop = messages.scrollHeight; };
   const clearEmpty = () => messages.querySelectorAll(".chat-empty").forEach(item => item.remove());
+  const stopPendingRefresh = () => {
+    if (pendingRefreshTimer) window.clearTimeout(pendingRefreshTimer);
+    pendingRefreshTimer = null;
+  };
+  const schedulePendingRefresh = () => {
+    stopPendingRefresh();
+    if (chatBusy || !conversationId || !messages.querySelector(".chat-message-pending")) return;
+    pendingRefreshTimer = window.setTimeout(() => {
+      pendingRefreshTimer = null;
+      loadHistory();
+    }, 2500);
+  };
   const evidenceUrl = (evidenceId) => (shell?.dataset.evidenceBase || "").replace("EVIDENCE_ID", encodeURIComponent(String(evidenceId)));
   const formatTime = (value) => {
     if (!value) return "";
@@ -476,11 +520,12 @@ button:disabled { cursor:wait; opacity:.65; }
         setStatus("正在删除对话…");
         try {
           const deleteUrl = shell.dataset.deleteBase.replace("00000000-0000-0000-0000-000000000000", item.conversation_id);
-          const response = await fetch(deleteUrl, {method: "DELETE", credentials: "same-origin", headers: {"X-CSRFToken": csrfToken, "Accept": "application/json"}});
+          const response = await fetchWithTimeout(deleteUrl, {method: "DELETE", credentials: "same-origin", headers: {"X-CSRFToken": csrfToken, "Accept": "application/json"}}, 20000);
           const payload = await response.json().catch(() => ({}));
           if (!response.ok || payload.ok === false) throw new Error(payload.message || "删除对话失败，请稍后重试。");
           const wasActive = conversationId === item.conversation_id;
           if (wasActive) {
+            stopPendingRefresh();
             conversationId = null;
             try { window.localStorage.removeItem(storageKey); } catch (_) {}
             messages.innerHTML = "";
@@ -496,6 +541,7 @@ button:disabled { cursor:wait; opacity:.65; }
       });
       button.append(title, preview, deleteButton);
       const selectConversation = async () => {
+        stopPendingRefresh();
         conversationId = item.conversation_id;
         try { window.localStorage.setItem(storageKey, conversationId); } catch (_) {}
         renderConversationList(items);
@@ -510,10 +556,12 @@ button:disabled { cursor:wait; opacity:.65; }
   };
   const loadConversationList = async () => {
     if (!historyList || !shell.dataset.listUrl) return [];
+    const requestToken = ++conversationListRequestToken;
     try {
-      const response = await fetch(shell.dataset.listUrl, {credentials: "same-origin", cache: "no-store"});
+      const response = await fetchWithTimeout(shell.dataset.listUrl, {credentials: "same-origin", cache: "no-store"}, 15000);
       if (!response.ok) throw new Error("history_list_unavailable");
       const payload = await response.json();
+      if (requestToken !== conversationListRequestToken) return [];
       const items = payload.conversations || [];
       if (!conversationId && items.length) {
         conversationId = items[0].conversation_id;
@@ -522,24 +570,31 @@ button:disabled { cursor:wait; opacity:.65; }
       renderConversationList(items);
       return items;
     } catch (_) {
+      if (requestToken !== conversationListRequestToken) return [];
       historyList.innerHTML = '<span class="subtle">历史对话暂时不可用</span>';
       return [];
     }
   };
   const loadHistory = async () => {
-    if (!conversationId) { showWelcome(); return; }
+    if (!conversationId) { stopPendingRefresh(); showWelcome(); return; }
+    const requestedConversationId = conversationId;
+    const requestToken = ++historyRequestToken;
     messages.innerHTML = '<p class="subtle chat-empty">正在加载对话历史…</p>';
-    const url = shell.dataset.messagesBase.replace("00000000-0000-0000-0000-000000000000", conversationId);
+    const url = shell.dataset.messagesBase.replace("00000000-0000-0000-0000-000000000000", requestedConversationId);
     try {
-      const response = await fetch(url, {credentials: "same-origin", cache: "no-store"});
+      const response = await fetchWithTimeout(url, {credentials: "same-origin", cache: "no-store"}, 15000);
       if (!response.ok) throw new Error("history_unavailable");
       const payload = await response.json();
+      if (requestToken !== historyRequestToken || conversationId !== requestedConversationId) return;
       messages.innerHTML = "";
       (payload.messages || []).forEach(message => renderMessage(message));
       showWelcome();
+      schedulePendingRefresh();
       setStatus(payload.messages?.length ? "已加载本地对话历史。" : "");
     } catch (_) {
+      if (requestToken !== historyRequestToken || conversationId !== requestedConversationId) return;
       conversationId = null;
+      stopPendingRefresh();
       try { window.localStorage.removeItem(storageKey); } catch (_) {}
       messages.innerHTML = "";
       showWelcome();
@@ -555,7 +610,7 @@ button:disabled { cursor:wait; opacity:.65; }
     setStatus("上一轮生成时间较长；可稍后刷新查看结果。");
   };
   const createConversation = async () => {
-    const response = await fetch(form.dataset.createUrl, {method: "POST", credentials: "same-origin", headers: {"X-CSRFToken": csrfToken, "Content-Type": "application/json"}, body: JSON.stringify({parse_id: Number(shell.dataset.storageKey.split(":").pop())})});
+    const response = await fetchWithTimeout(form.dataset.createUrl, {method: "POST", credentials: "same-origin", headers: {"X-CSRFToken": csrfToken, "Content-Type": "application/json"}, body: JSON.stringify({parse_id: Number(shell.dataset.storageKey.split(":").pop())})}, 30000);
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || !payload.conversation_id) throw new Error(payload.message || "无法创建会话。");
     conversationId = payload.conversation_id;
@@ -564,8 +619,10 @@ button:disabled { cursor:wait; opacity:.65; }
     return conversationId;
   };
   const setChatBusy = (busy) => {
+    chatBusy = busy;
     questionInput.disabled = busy;
     submitButton.disabled = busy;
+    if (newChatButton) newChatButton.disabled = busy;
     submitLabel.hidden = busy;
     submitSpinner.hidden = !busy;
     if (!busy && chatElapsedTimer) { window.clearInterval(chatElapsedTimer); chatElapsedTimer = null; }
@@ -574,6 +631,10 @@ button:disabled { cursor:wait; opacity:.65; }
     if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); form.requestSubmit(); }
   });
   if (newChatButton) newChatButton.addEventListener("click", () => {
+    if (chatBusy) return;
+    historyRequestToken += 1;
+    conversationListRequestToken += 1;
+    stopPendingRefresh();
     conversationId = null;
     try { window.localStorage.removeItem(storageKey); } catch (_) {}
     messages.innerHTML = "";
@@ -587,6 +648,7 @@ button:disabled { cursor:wait; opacity:.65; }
     event.preventDefault();
     const question = questionInput.value.trim();
     if (!question) return;
+    if (chatBusy) return;
     setChatBusy(true);
     const chatStartedAt = Date.now();
     setStatus("正在检索当前论文 Evidence…（已用时 0 秒）");
@@ -598,7 +660,10 @@ button:disabled { cursor:wait; opacity:.65; }
       await historyReady;
       if (!conversationId) await createConversation();
       const askUrl = form.dataset.askBase.replace("00000000-0000-0000-0000-000000000000", conversationId);
-      const response = await fetch(askUrl, {method: "POST", credentials: "same-origin", headers: {"X-CSRFToken": csrfToken, "Content-Type": "application/json"}, body: JSON.stringify({question, request_id: randomId()})});
+      const controller = new AbortController();
+      const requestTimeout = window.setTimeout(() => controller.abort(), 150000);
+      const response = await fetch(askUrl, {method: "POST", signal: controller.signal, credentials: "same-origin", headers: {"X-CSRFToken": csrfToken, "Content-Type": "application/json"}, body: JSON.stringify({question, request_id: randomId()})});
+      window.clearTimeout(requestTimeout);
       const payload = await response.json().catch(() => ({}));
       pending.remove();
       if (response.status === 409) {
