@@ -20,9 +20,10 @@ LEASE_SECONDS = 120
 
 
 class ChatError(RuntimeError):
-    def __init__(self, code, message):
+    def __init__(self, code, message, *, details=None):
         super().__init__(message)
         self.code = code
+        self.details = details or {}
 
 
 def create_conversation(user, document_id, *, parse_id=None, title=""):
@@ -33,6 +34,11 @@ def create_conversation(user, document_id, *, parse_id=None, title=""):
 def ask_conversation(conversation, user, question, *, request_id=None, provider=None):
     if conversation.user_id != user.pk:
         raise ChatError("forbidden", "Conversation is unavailable.")
+    question = str(question or "").strip()
+    if not question:
+        raise ChatError("invalid_question", "请输入问题后再发送。")
+    if len(question) > 4000:
+        raise ChatError("invalid_question", "问题不能超过 4000 个字符。")
     request_id = request_id or uuid.uuid4().hex
     existing = conversation.messages.filter(request_id=request_id, role=PaperChatMessage.Role.ASSISTANT).first()
     if existing is not None:
@@ -50,17 +56,27 @@ def ask_conversation(conversation, user, question, *, request_id=None, provider=
             pending.save(update_fields=("status", "error_code", "error_message", "completed_at", "lease_expires_at"))
             pending = None
         if pending is not None:
-            raise ChatError("busy", "A response is already being generated.")
+            retry_after = 1
+            if pending.lease_expires_at:
+                retry_after = max(1, int((pending.lease_expires_at - now).total_seconds()))
+            raise ChatError(
+                "busy",
+                "上一轮回答仍在生成，请稍候。",
+                details={"pending_message_id": pending.pk, "retry_after_seconds": retry_after},
+            )
         sequence = conversation.messages.count()
         user_message = PaperChatMessage.objects.create(
             conversation=conversation, request_id=request_id, sequence=sequence,
-            role=PaperChatMessage.Role.USER, content=question[:4000],
+            role=PaperChatMessage.Role.USER, content=question,
         )
         assistant = PaperChatMessage.objects.create(
             conversation=conversation, request_id=request_id, sequence=sequence + 1,
             role=PaperChatMessage.Role.ASSISTANT, content="处理中", status=PaperChatMessage.Status.PENDING,
             lease_expires_at=now + timedelta(seconds=LEASE_SECONDS), started_at=now,
         )
+        if not conversation.title:
+            conversation.title = question[:200]
+            conversation.save(update_fields=("title", "updated_at"))
     try:
         parse, catalog = open_paper(user, conversation.document_parse.uploaded_document.canonical_document_id,
                                     parse_id=conversation.document_parse_id)
